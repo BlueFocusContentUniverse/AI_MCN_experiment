@@ -279,9 +279,19 @@ class VideoEditingService:
                             part_output
                         )
                         
+                        # 标准化视频片段为竖屏1080p
+                        normalized_part_output = os.path.join(segment_dir, f"normalized_part_{i+1}.mp4")
+                        normalized_part_file = self.normalize_video(
+                            part_file,
+                            normalized_part_output,
+                            target_width=1080,
+                            target_height=1920,
+                            fps=30
+                        )
+                        
                         segment_parts.append({
                             "part_id": i + 1,
-                            "file_path": part_file,
+                            "file_path": normalized_part_file,
                             "original": segment
                         })
                         
@@ -432,5 +442,176 @@ class VideoEditingService:
                 raise RuntimeError(f"Error merging video segments: {process.stderr}")
             
             print(f"成功创建最终视频: {output_file}")
+            
+            return output_file 
+
+    def get_video_info(self, video_path: str) -> Tuple[int, int, float]:
+        """
+        获取视频的宽度、高度和时长
+        
+        参数:
+        video_path: 视频文件路径
+        
+        返回:
+        (宽度, 高度, 时长)的元组
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        # 获取视频信息
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,duration",
+            "-of", "json",
+            video_path
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"Error getting video info: {result.stderr}")
+        
+        info = json.loads(result.stdout)
+        
+        # 提取宽度、高度和时长
+        width = int(info["streams"][0]["width"])
+        height = int(info["streams"][0]["height"])
+        
+        # 有些视频可能没有在视频流中包含时长信息，需要从容器中获取
+        if "duration" in info["streams"][0]:
+            duration = float(info["streams"][0]["duration"])
+        else:
+            # 获取容器信息
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                video_path
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"Error getting video duration: {result.stderr}")
+            
+            format_info = json.loads(result.stdout)
+            duration = float(format_info["format"]["duration"])
+        
+        return width, height, duration
+    
+    def normalize_video(self, video_path: str, output_file: Optional[str] = None, 
+                        target_width: int = 1080, target_height: int = 1920, 
+                        fps: int = 30) -> str:
+        """
+        将视频标准化为指定尺寸的竖屏视频，保持原始宽高比并添加黑边
+        
+        参数:
+        video_path: 视频文件路径
+        output_file: 输出文件路径，如果为None则自动生成
+        target_width: 目标宽度，默认为1080（竖屏视频）
+        target_height: 目标高度，默认为1920（竖屏视频）
+        fps: 目标帧率，默认为30
+        
+        返回:
+        标准化后的视频文件路径
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        # 如果没有指定输出文件，则自动生成
+        if not output_file:
+            timestamp = int(datetime.datetime.now().timestamp())
+            output_file = os.path.join(self.output_dir, f"normalized_{timestamp}.mp4")
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # 获取视频信息
+        video_width, video_height, video_duration = self.get_video_info(video_path)
+        print(f"原始视频信息 - 尺寸: {video_width}x{video_height}, 时长: {video_duration}秒")
+        
+        # 创建临时目录
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 临时输出文件
+            temp_output = os.path.join(temp_dir, "temp_normalized.mp4")
+            
+            # 根据视频宽高比确定缩放和填充方式
+            aspect_ratio = video_width / video_height
+            target_aspect_ratio = target_width / target_height
+            
+            # 构建视频滤镜
+            if aspect_ratio > target_aspect_ratio:
+                # 横屏视频，按宽度缩放，然后添加上下黑边
+                vf = f"scale={target_width}:-1:force_original_aspect_ratio=1,pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"
+            else:
+                # 竖屏视频，按高度缩放，然后添加左右黑边
+                vf = f"scale=-1:{target_height}:force_original_aspect_ratio=1,pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"
+            
+            # 构建ffmpeg命令
+            cmd = [
+                "ffmpeg",
+                "-y",  # 覆盖输出文件
+                "-i", video_path,  # 输入文件
+                "-r", str(fps),  # 帧率
+                "-c:v", "libx264",  # 视频编码
+                "-preset", "medium",  # 编码预设
+                "-crf", "23",  # 质量
+                "-c:a", "aac",  # 音频编码
+                "-b:a", "128k",  # 音频比特率
+                "-vf", vf,  # 视频滤镜
+                "-movflags", "+faststart",  # 优化MP4文件结构
+                temp_output  # 临时输出文件
+            ]
+            
+            print(f"执行FFmpeg命令 (标准化视频): {' '.join(cmd)}")
+            
+            # 执行命令
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if process.returncode != 0:
+                raise RuntimeError(f"Error normalizing video: {process.stderr}")
+            
+            # 验证输出文件是否有效
+            validate_cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type,width,height",
+                "-of", "json",
+                temp_output
+            ]
+            
+            validate_result = subprocess.run(
+                validate_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if validate_result.returncode != 0:
+                raise RuntimeError(f"Generated normalized video is invalid: {validate_result.stderr}")
+            
+            # 复制到最终输出位置
+            shutil.copy2(temp_output, output_file)
+            
+            print(f"成功创建标准化视频: {output_file}")
             
             return output_file 
