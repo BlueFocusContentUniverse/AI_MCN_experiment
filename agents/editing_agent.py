@@ -1,5 +1,7 @@
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.video_editing import SplitVideoBySegmentsTool
+import os
+
 
 class EditingAgent:
     @staticmethod
@@ -18,7 +20,13 @@ class EditingAgent:
             verbose=True,
             allow_delegation=False,
             tools=[split_video_tool],
-            llm_config={"model": "gemini-1.5-flash"}
+            llm=LLM(
+                model="gemini-1.5-flash",
+                api_key=os.environ.get('OPENAI_API_KEY'),
+                base_url=os.environ.get('OPENAI_BASE_URL'),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return editing_agent 

@@ -1,8 +1,11 @@
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.vision_analysis_enhanced import LoadFramesAnalysisFromFileTool
 from typing import Type
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool, tool
+from langchain.chat_models import ChatOpenAI
+import os
+
 
 class CinematographyInput(BaseModel):
     """电影摄影分析工具的输入模式"""
@@ -63,7 +66,13 @@ class CinematographyAgent:
             verbose=True,
             allow_delegation=False,
             tools=[cinematography_tool, load_analysis_tool],
-            llm_config={"model": "o1-mini"}
+            llm=LLM(
+                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                api_key=os.environ.get('OPENAI_API_KEY'),
+                base_url=os.environ.get('OPENAI_BASE_URL'),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return cinematography_agent 

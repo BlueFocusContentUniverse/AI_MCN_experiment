@@ -628,7 +628,7 @@ class BatchProcessingFramesTool(BaseTool):
             response = self._client.chat.completions.create(
                 model="gemini-1.5-flash",  # 或使用其他支持视觉的模型
                 messages=[
-                    {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请以JSON格式返回分析结果。"},
+                    {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请以JSON格式返回分析结果。请务必输出json格式，不要输出其他格式。不要任何多余信息，否则无法解析。"},
                     {"role": "user", "content": content}
                 ],
                 max_tokens=4000
@@ -699,14 +699,14 @@ class BatchProcessingFramesTool(BaseTool):
                 # 如果所有方法都失败，记录详细错误并创建简单结果
                 if parsed_results is None:
                     print(f"无法解析JSON响应，将创建简单结果")
-                    print(f"原始响应内容的前500个字符: {content[:500]}...")
+                    print(f"原始响应内容: {content[:]}...")
                     
                     # 创建简单结果
                     for i, time_val in enumerate(times):
                         results.append({
                             "time": time_val,
                             "error": "无法解析模型响应",
-                            "raw_content_sample": content[:200] + "..." if i == 0 else "见第一帧"
+                            "raw_content_sample": content[:] + "..." if i == 0 else "见第一帧"
                         })
                     return results
                 
@@ -733,7 +733,7 @@ class BatchProcessingFramesTool(BaseTool):
                     results.append({
                         "time": time_val,
                         "error": f"解析错误: {str(parse_error)}",
-                        "raw_content_sample": content[:200] + "..." if i == 0 else "见第一帧"
+                        "raw_content_sample": content[:] + "..." if i == 0 else "见第一帧"
                     })
         
         except Exception as e:

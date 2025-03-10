@@ -1,6 +1,6 @@
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.vision_analysis_enhanced import ExtractVideoFramesTool, AnalyzeVideoFramesTool, BatchProcessingFramesTool, LoadFramesAnalysisFromFileTool
-
+import os
 class VisionAgent:
     @staticmethod
     def create():
@@ -25,11 +25,18 @@ class VisionAgent:
             
             重要提示：对于任何视频分析任务，你必须使用BatchProcessingFrames工具，该工具会自动处理分批逻辑，确保所有帧都被分析。
             该工具会将完整的分析结果保存到文件中，并返回文件路径，以便后续处理。
-            在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用LoadFramesAnalysisFromFile工具加载完整的分析结果。""",
+            在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用LoadFramesAnalysisFromFile工具加载完整的分析结果。
+            其中，"frames_analysis_file"是结果文件的路径，请务必使用这个字段，否则下一个Agent无法正确加载分析结果。""",
             verbose=True,
             allow_delegation=False,
             tools=[extract_frames_tool, analyze_frames_tool, batch_processing_tool, load_analysis_tool],
-            llm_config={"model": "gemini-1.5-pro"}
+            llm=LLM(
+                model="gemini-1.5-pro",
+                api_key=os.environ.get("OPENAI_API_KEY"),
+                base_url=os.environ.get("OPENAI_BASE_URL"),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return vision_agent 

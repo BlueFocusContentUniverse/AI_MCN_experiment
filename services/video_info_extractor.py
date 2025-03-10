@@ -10,6 +10,7 @@ from services.mongodb_service import MongoDBService
 from crewai import Task, Crew, Process
 import datetime
 import logging
+from services.embedding_service import EmbeddingService
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -33,6 +34,7 @@ class VideoInfoExtractor:
         self.transcription_service = WhisperTranscriptionService()
         self.vision_agent = VisionAgent.create()
         self.cinematography_agent = CinematographyAgent.create()
+        self.embedding_service = EmbeddingService()  # 添加嵌入服务
         
         # 初始化MongoDB服务
         self.mongodb_service = None
@@ -224,210 +226,163 @@ class VideoInfoExtractor:
         logger.info(f"创建空的帧分析文件: {file_path}")
         return file_path
     
-    def _extract_file_path_from_result(self, result) -> Optional[str]:
-        """从Agent结果中提取文件路径"""
+    def _safe_parse_json(self, result: Any, method_name: str = "未知方法") -> Dict[str, Any]:
+        """
+        安全地解析JSON结果，处理各种错误情况
+        
+        参数:
+        result: 需要解析的结果
+        method_name: 调用方法名称，用于日志
+        
+        返回:
+        解析后的字典或包含原始结果的错误字典
+        """
         try:
-            logger.info(f"尝试从结果中提取文件路径，结果类型: {type(result)}")
+            # 如果已经是字典类型，直接返回
+            if isinstance(result, dict):
+                return result
             
-            # 处理CrewOutput类型
-            if hasattr(result, 'raw') and hasattr(result, 'final_answer'):
-                # 尝试从final_answer中提取
-                final_answer = result.final_answer
-                logger.info(f"从CrewOutput.final_answer中提取: {final_answer[:100]}...")
-                
-                # 尝试解析JSON
-                try:
-                    # 检查是否是JSON格式
-                    if final_answer.strip().startswith('{') and final_answer.strip().endswith('}'):
-                        result_dict = json.loads(final_answer)
-                        # 检查是否包含文件路径
-                        if 'result_file_path' in result_dict:
-                            file_path = result_dict['result_file_path']
-                            logger.info(f"从CrewOutput.final_answer的JSON中提取到文件路径: {file_path}")
-                            return file_path
-                        elif 'result_file' in result_dict:
-                            file_path = result_dict['result_file']
-                            logger.info(f"从CrewOutput.final_answer的JSON中提取到文件路径: {file_path}")
-                            return file_path
-                except json.JSONDecodeError:
-                    logger.info("CrewOutput.final_answer不是有效的JSON格式")
-                
-                # 尝试使用正则表达式从文本中提取
-                file_path_patterns = [
-                    r'result_file_path["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-                    r'result_file["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-                    r'文件路径["\']?\s*[:：]\s*["\']?([^"\']+)["\']?',
-                    r'保存到["\']?\s*[:：]\s*["\']?([^"\']+)["\']?',
-                    r'["\']([^"\']*frames_analysis[^"\']*\.json)["\']'
-                ]
-                
-                for pattern in file_path_patterns:
-                    match = re.search(pattern, final_answer)
-                    if match:
-                        file_path = match.group(1)
-                        logger.info(f"从CrewOutput.final_answer文本中提取到文件路径: {file_path}")
-                        return file_path
-                
-                # 如果从final_answer中无法提取，尝试从raw中提取
-                if hasattr(result, 'raw') and result.raw:
-                    logger.info("尝试从CrewOutput.raw中提取文件路径")
-                    raw_result = result.raw
-                    
-                    # 如果raw是字典，尝试直接查找文件路径
-                    if isinstance(raw_result, dict):
-                        path_fields = ['result_file', 'result_file_path', 'file_path', 'frames_analysis_file', 'output_file']
-                        for field in path_fields:
-                            if field in raw_result and isinstance(raw_result[field], str):
-                                file_path = raw_result[field]
-                                logger.info(f"从CrewOutput.raw字典中找到文件路径: {file_path}")
-                                return file_path
+            # 检查是否为CrewOutput类型（通过属性判断）
+            if hasattr(result, 'json_dict') and result.json_dict is not None:
+                return result.json_dict
+            # elif hasattr(result, 'to_dict') and callable(result.to_dict):
+            #     return result.to_dict()
             
-            # 如果结果是字符串，尝试直接从文本中提取文件路径
+            # 如果是字符串，尝试解析
             if isinstance(result, str):
-                # 尝试使用正则表达式查找文件路径
-                file_path_patterns = [
-                    r'result_file["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-                    r'文件路径["\']?\s*[:：]\s*["\']?([^"\']+)["\']?',
-                    r'保存到["\']?\s*[:：]\s*["\']?([^"\']+)["\']?',
-                    r'["\']([^"\']*frames_analysis[^"\']*\.json)["\']'
-                ]
+                # 先清理结果
+                cleaned_result = result.strip()  # 去除首尾空格
+                cleaned_result = re.sub(r"[\x00-\x1F\x7F]", "", cleaned_result)  # 去掉非法控制字符
                 
-                for pattern in file_path_patterns:
-                    match = re.search(pattern, result)
-                    if match:
-                        file_path = match.group(1)
-                        logger.info(f"从文本中提取到文件路径: {file_path}")
-                        return file_path
-                
-                # 尝试解析JSON
+                # 查找JSON部分
+                json_match = re.search(r'```json\n(.*?)\n```', cleaned_result, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                    return json.loads(json_str)
+                else:
+                    # 尝试直接解析为JSON
+                    cleaned_result = re.sub(r"^```|```$", "", cleaned_result).strip()  # 去掉其他可能的代码块标记
+                    return json.loads(cleaned_result)
+            
+            # 处理可能有raw属性的对象（如CrewOutput）
+            if hasattr(result, 'raw'):
                 try:
-                    # 查找JSON块
-                    json_match = re.search(r'```json\n(.*?)\n```', result, re.DOTALL)
-                    if json_match:
-                        json_str = json_match.group(1)
-                        result_dict = json.loads(json_str)
-                    else:
-                        # 尝试将整个字符串解析为JSON
-                        result_dict = json.loads(result)
-                except json.JSONDecodeError:
-                    logger.warning("无法将结果解析为JSON")
-                    return None
-            elif hasattr(result, 'to_dict'):
-                result_dict = result.to_dict()
-            else:
-                result_dict = result
+                    cleaned_raw = result.raw.strip()
+                    cleaned_raw = re.sub(r"[\x00-\x1F\x7F]", "", cleaned_raw)
+                    cleaned_raw = re.sub(r"^```json|^```|```$", "", cleaned_raw).strip()
+                    return json.loads(cleaned_raw)
+                except (json.JSONDecodeError, AttributeError):
+                    # 如果raw不能解析为JSON，返回包含raw的字典
+                    if isinstance(result.raw, str):
+                        return {"error": "无法解析JSON", "raw_output": result.raw}
             
-            # 如果成功解析为字典，搜索文件路径
-            if isinstance(result_dict, dict):
-                logger.info(f"结果字典的键: {list(result_dict.keys())}")
-                
-                # 直接查找可能包含文件路径的字段
-                path_fields = ['result_file', 'result_file_path', 'file_path', 'frames_analysis_file', 'output_file']
-                for field in path_fields:
-                    if field in result_dict and isinstance(result_dict[field], str):
-                        file_path = result_dict[field]
-                        logger.info(f"在字段 {field} 中找到文件路径: {file_path}")
-                        return file_path
-                
-                # 查找output字段
-                if 'output' in result_dict and isinstance(result_dict['output'], dict):
-                    for field in path_fields:
-                        if field in result_dict['output'] and isinstance(result_dict['output'][field], str):
-                            file_path = result_dict['output'][field]
-                            logger.info(f"在output.{field}中找到文件路径: {file_path}")
-                            return file_path
-                
-                # 递归搜索嵌套字典
-                for key, value in result_dict.items():
-                    if isinstance(value, dict):
-                        for field in path_fields:
-                            if field in value and isinstance(value[field], str):
-                                file_path = value[field]
-                                logger.info(f"在{key}.{field}中找到文件路径: {file_path}")
-                                return file_path
+            # 如果都失败了，返回一个错误字典
+            return {"error": "无法解析结果", "raw_output": str(result)}
+        
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ {method_name} JSON解析失败: {e}")
             
-            # 如果已知文件路径存在，直接返回
-            known_file_path = "./output/frames_analysis/frames_analysis_temp1_1741250041.json"
-            if os.path.exists(known_file_path):
-                logger.info(f"使用已知的文件路径: {known_file_path}")
-                return known_file_path
+            # 尝试从结果中提取可用的原始文本
+            raw_output = str(result)
+            if hasattr(result, 'raw'):
+                raw_output = str(result.raw)
+            elif hasattr(result, 'final_answer'):
+                raw_output = str(result.final_answer)
             
-            # 尝试在output/frames_analysis目录中查找最新的frames_analysis文件
-            frames_analysis_dir = os.path.join("./output", "frames_analysis")
-            if os.path.exists(frames_analysis_dir):
-                frames_analysis_files = [f for f in os.listdir(frames_analysis_dir) if f.startswith("frames_analysis") and f.endswith(".json")]
-                if frames_analysis_files:
-                    # 按修改时间排序，获取最新的文件
-                    latest_file = max(frames_analysis_files, key=lambda f: os.path.getmtime(os.path.join(frames_analysis_dir, f)))
-                    latest_file_path = os.path.join(frames_analysis_dir, latest_file)
-                    logger.info(f"找到最新的frames_analysis文件: {latest_file_path}")
-                    return latest_file_path
+            # 清理原始输出，确保是有效的字符串
+            raw_output = re.sub(r"[\x00-\x1F\x7F]", "", raw_output)
             
-            logger.warning("未找到文件路径")
-            return None
+            return {"error": f"JSON解析错误: {str(e)}", "raw_output": raw_output}
         except Exception as e:
-            logger.error(f"从结果中提取文件路径时出错: {e}")
-            return None
+            logger.error(f"❌ {method_name} 处理结果时出错: {e}")
+            return {"error": f"处理错误: {str(e)}", "raw_output": str(result)}
     
-    def _integrate_information(
-        self, video_path: str, transcription: Dict[str, Any], 
-        vision_result: Any, cinematography_result: Any,
-        frames_analysis_file: str) -> Dict[str, Any]:
-        """整合所有信息"""
+    def _extract_file_path_from_result(self, result: Any) -> str:
+        """
+        从结果中提取文件路径
         
-        # 确保输出目录存在
-        os.makedirs(self.output_dir, exist_ok=True)
+        参数:
+        result: 分析结果，可能是CrewOutput对象或其他类型
         
-        # 加载帧分析结果
-        frames_analysis = {}
+        返回:
+        提取的文件路径，如果无法提取则返回空字符串
+        """
         try:
-            if os.path.exists(frames_analysis_file):
-                with open(frames_analysis_file, 'r', encoding='utf-8') as f:
-                    frames_analysis = json.load(f)
-                logger.info(f"成功加载帧分析文件: {frames_analysis_file}")
-            else:
-                logger.warning(f"帧分析文件不存在: {frames_analysis_file}")
+            # 处理CrewOutput对象
+            if hasattr(result, 'json_dict') and result.json_dict is not None:
+                if 'frames_analysis_file' in result.json_dict:
+                    return result.json_dict['frames_analysis_file']
+                elif 'file_path' in result.json_dict:
+                    return result.json_dict['file_path']
+            
+            # 尝试使用_safe_parse_json解析结果
+            parsed_result = self._safe_parse_json(result, "_extract_file_path_from_result")
+            
+            # 从解析后的结果中查找文件路径
+            if 'frames_analysis_file' in parsed_result:
+                return parsed_result['frames_analysis_file']
+            elif 'file_path' in parsed_result:
+                return parsed_result['file_path']
+            
+            # 如果找不到文件路径，记录错误并返回空字符串
+            logger.warning(f"无法从结果中提取文件路径: {parsed_result}")
+            return ""
         except Exception as e:
-            logger.error(f"加载帧分析文件时出错: {str(e)}")
+            logger.error(f"提取文件路径时出错: {e}")
+            return ""
+    
+    def _integrate_information(self, video_path: str, transcription: Dict[str, Any], 
+                              vision_result: Any, cinematography_result: Any,
+                              frames_analysis_file: str) -> Dict[str, Any]:
+        """
+        整合所有提取的信息
         
-        # 提取视觉分析摘要
-        vision_summary = self._extract_vision_summary(vision_result, frames_analysis)
+        参数:
+        video_path: 视频文件路径
+        transcription: 语音转写结果
+        vision_result: 视觉分析结果
+        cinematography_result: 电影摄影分析结果
+        frames_analysis_file: 帧分析文件路径
         
-        # 提取电影摄影分析摘要
-        cinematography_summary = self._extract_cinematography_summary(cinematography_result)
+        返回:
+        整合后的视频信息
+        """
+        # 解析视觉分析结果
+        vision_data = self._safe_parse_json(vision_result, "_integrate_information.vision")
         
-        # 生成多模态信息
-        multimodal_info = self._generate_multimodal_info(transcription, vision_summary, cinematography_summary)
+        # 解析电影摄影分析结果
+        cinematography_data = self._safe_parse_json(cinematography_result, "_integrate_information.cinematography")
         
-        # 生成内容标签
-        content_tags = self._generate_content_tags(transcription, vision_summary, cinematography_summary)
+        # 生成电影摄影分析的嵌入向量
+        cinematography_text = ""
+        if isinstance(cinematography_data, dict):
+            cinematography_text = str(cinematography_data)
+        elif isinstance(cinematography_data, str):
+            cinematography_text = cinematography_data
         
-        # 整合信息
+        # 获取嵌入向量
+        cinematography_embedding = None
+        if cinematography_text:
+            try:
+                cinematography_embedding = self.embedding_service.get_embedding(cinematography_text)
+                logger.info(f"成功生成电影摄影分析的嵌入向量，维度: {len(cinematography_embedding)}")
+            except Exception as e:
+                logger.error(f"生成嵌入向量时出错: {str(e)}")
+        
+        # 整合所有信息
         video_info = {
             "video_path": video_path,
             "analysis_time": datetime.datetime.now().isoformat(),
-            "brand": "宝马",
+            "brand": " ",
             "transcription": transcription,
-            "vision_analysis": vision_summary,
-            "cinematography_analysis": cinematography_summary,
-            "multimodal_info": multimodal_info,
-            "content_tags": content_tags,
+            "vision_analysis": vision_data,
+            "cinematography_analysis": cinematography_data,
             "frames_analysis_file": frames_analysis_file
         }
         
-        # 保存原始响应
-        if hasattr(vision_result, 'raw'):
-            video_info["vision_raw"] = vision_result.raw
-        
-        if hasattr(cinematography_result, 'raw'):
-            video_info["cinematography_raw"] = cinematography_result.raw
-        
-        # 保存整合后的信息
-        output_file = os.path.join(self.output_dir, f"integrated_info_{os.path.basename(video_path)}.json")
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(video_info, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"整合信息已保存到: {output_file}")
+        # 添加嵌入向量
+        if cinematography_embedding:
+            video_info["cinematography_embedding"] = cinematography_embedding
         
         return video_info
     

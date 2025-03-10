@@ -1,7 +1,9 @@
-from crewai import Agent
+from crewai import Agent, LLM
 from typing import Type, List, Dict, Any
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool, tool
+import os
+
 
 class ScriptInput(BaseModel):
     """脚本分析工具的输入模式"""
@@ -52,7 +54,27 @@ class ScriptAnalysisAgent:
             verbose=True,
             allow_delegation=False,
             tools=[script_analysis_tool],
-            llm_config={"model": "anthropic.claude-3-5-sonnet-20241022-v2:0"}
+            llm=LLM(
+                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",  # Claude模型名称
+                api_key=os.environ.get('OPENAI_API_KEY'),  # 代理API Key
+                base_url=os.environ.get('OPENAI_BASE_URL'),  # 代理Base URL
+                temperature=0.7,
+                custom_llm_provider="openai" # 强制使用OpenAI API
+            ),
+            response_template="""
+                请严格遵循以下格式输出json：
+                {{ .Response }}
+                {
+                    "requirements": [
+                        {
+                            "segment": "口播稿的第1段文字",
+                            "duration": "时长",
+                            "visual_elements": ["场景类型", "情绪基调"],
+                            "description": "描述"
+                        }
+                    ]
+                }   
+                """
         )
         
         return script_analysis_agent 

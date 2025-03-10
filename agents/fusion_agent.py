@@ -1,6 +1,8 @@
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.fusion import FuseAudioVideoAnalysisTool
 from tools.vision_analysis_enhanced import LoadFramesAnalysisFromFileTool
+import os
+
 
 class FusionAgent:
     @staticmethod
@@ -27,7 +29,13 @@ class FusionAgent:
             verbose=True,
             allow_delegation=False,
             tools=[fuse_analysis_tool, load_analysis_tool],
-            llm_config={"model": "anthropic.claude-3-5-sonnet-20241022-v2:0"}
+            llm=LLM(
+                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                api_key=os.environ.get('OPENAI_API_KEY'),
+                base_url=os.environ.get('OPENAI_BASE_URL'),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return fusion_agent 

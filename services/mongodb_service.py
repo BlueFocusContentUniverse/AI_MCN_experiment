@@ -1,11 +1,16 @@
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 from datetime import datetime
 import time
 import logging
+import numpy as np
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class MongoDBService:
     """MongoDB数据存储服务"""
@@ -17,7 +22,7 @@ class MongoDBService:
         if not mongo_uri:
             raise ValueError("MONGODB_URI environment variable is not set")
         
-        print(f"尝试连接到MongoDB: {mongo_uri}")
+        logger.info(f"尝试连接到MongoDB: {mongo_uri}")
         
         # 创建MongoDB客户端，添加重试逻辑
         retry_count = 0
@@ -29,18 +34,18 @@ class MongoDBService:
             )
                 # 测试连接
                 self.client.admin.command('ping')
-                print("MongoDB连接成功")
+                logger.info("MongoDB连接成功")
                 break
             except Exception as e:
                 retry_count += 1
-                print(f"MongoDB连接失败 (尝试 {retry_count}/{max_retries}): {str(e)}")
+                logger.warning(f"MongoDB连接失败 (尝试 {retry_count}/{max_retries}): {str(e)}")
                 if retry_count >= max_retries:
                     raise
                 time.sleep(2)  # 等待2秒后重试
         
         # 获取数据库
         db_name = os.environ.get('MONGODB_DB', 'test_mcn')
-        print(f"使用数据库: {db_name}")
+        logger.info(f"使用数据库: {db_name}")
         self.db: Database = self.client[db_name]
         
         # 获取集合
@@ -60,9 +65,13 @@ class MongoDBService:
             
             # 视觉特征索引
             self.video_info.create_index("visual_features.scene_type")
-            print("MongoDB索引创建成功")
+            
+            # 品牌索引
+            self.video_info.create_index("brand")
+            
+            logger.info("MongoDB索引创建成功")
         except Exception as e:
-            print(f"创建索引时出错: {str(e)}")
+            logger.error(f"创建索引时出错: {str(e)}")
             # 继续执行，不要因为索引创建失败而中断程序
     
     def _sanitize_document(self, doc: Any) -> Any:
@@ -126,10 +135,10 @@ class MongoDBService:
                 )
                 
                 if result.modified_count == 1:
-                    logging.info(f"更新文档成功: {existing_doc['_id']}")
+                    logger.info(f"更新文档成功: {existing_doc['_id']}")
                     return str(existing_doc["_id"])
                 else:
-                    logging.warning(f"未能更新文档: {existing_doc['_id']}")
+                    logger.warning(f"未能更新文档: {existing_doc['_id']}")
                     return str(existing_doc["_id"])
             else:
                 # 如果不存在，则插入
@@ -138,11 +147,38 @@ class MongoDBService:
                 
                 # 插入文档
                 result = self.video_info.insert_one(sanitized_info)
-                logging.info(f"插入文档成功: {result.inserted_id}")
+                logger.info(f"插入文档成功: {result.inserted_id}")
                 return str(result.inserted_id)
         except Exception as e:
-            logging.error(f"保存到MongoDB时出错: {str(e)}")
+            logger.error(f"保存到MongoDB时出错: {str(e)}")
             raise
+    
+    def update_video_embedding(self, video_id: str, embedding: List[float]) -> bool:
+        """
+        更新视频的嵌入向量
+        
+        参数:
+        video_id: 视频ID
+        embedding: 嵌入向量
+        
+        返回:
+        更新是否成功
+        """
+        try:
+            result = self.video_info.update_one(
+                {"_id": video_id},
+                {"$set": {"cinematography_embedding": embedding}}
+            )
+            
+            if result.modified_count == 1:
+                logger.info(f"更新视频嵌入向量成功: {video_id}")
+                return True
+            else:
+                logger.warning(f"未能更新视频嵌入向量: {video_id}")
+                return False
+        except Exception as e:
+            logger.error(f"更新视频嵌入向量时出错: {str(e)}")
+            return False
     
     def find_video_by_path(self, video_path: str) -> Optional[Dict[str, Any]]:
         """
@@ -170,6 +206,84 @@ class MongoDBService:
         """
         results = self.video_info.find(criteria).limit(limit)
         return list(results)
+    
+    def vector_search(self, vector: List[float], pre_filter: Dict[str, Any] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        使用向量相似度搜索视频
+        
+        参数:
+        vector: 查询向量
+        pre_filter: 预过滤条件
+        limit: 最大返回数量
+        
+        返回:
+        相似度最高的视频列表，每个视频包含similarity_score字段
+        """
+        try:
+            # 构建查询条件
+            query = {}
+            if pre_filter:
+                query.update(pre_filter)
+            
+            # 确保只查询有嵌入向量的文档
+            query["cinematography_embedding"] = {"$exists": True}
+            
+            # 查询所有符合条件的视频
+            videos = list(self.video_info.find(query))
+            
+            # 如果没有找到视频，返回空列表
+            if not videos:
+                logger.warning(f"未找到符合条件的视频: {pre_filter}")
+                return []
+            
+            # 计算相似度
+            results_with_scores = []
+            for video in videos:
+                if "cinematography_embedding" in video and video["cinematography_embedding"]:
+                    # 计算余弦相似度
+                    similarity = self._cosine_similarity(vector, video["cinematography_embedding"])
+                    
+                    # 添加相似度分数
+                    video_copy = dict(video)
+                    video_copy["similarity_score"] = similarity
+                    results_with_scores.append(video_copy)
+            
+            # 按相似度降序排序
+            results_with_scores.sort(key=lambda x: x["similarity_score"], reverse=True)
+            
+            # 限制返回数量
+            return results_with_scores[:limit]
+        
+        except Exception as e:
+            logger.error(f"向量搜索时出错: {str(e)}")
+            return []
+    
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """
+        计算两个向量的余弦相似度
+        
+        参数:
+        vec1: 第一个向量
+        vec2: 第二个向量
+        
+        返回:
+        余弦相似度，范围为[-1, 1]
+        """
+        # 转换为numpy数组
+        vec1_np = np.array(vec1)
+        vec2_np = np.array(vec2)
+        
+        # 计算余弦相似度
+        dot_product = np.dot(vec1_np, vec2_np)
+        norm_vec1 = np.linalg.norm(vec1_np)
+        norm_vec2 = np.linalg.norm(vec2_np)
+        
+        # 避免除以零
+        if norm_vec1 == 0 or norm_vec2 == 0:
+            return 0.0
+        
+        similarity = dot_product / (norm_vec1 * norm_vec2)
+        return float(similarity)
     
     def close(self):
         """关闭MongoDB连接"""

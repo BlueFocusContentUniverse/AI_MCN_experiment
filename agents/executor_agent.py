@@ -1,7 +1,10 @@
 # agents/executor_agent.py
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.scene_detection import DetectScenesTool, ExtractSceneFramesTool
 from tools.frame_analysis import AnalyzeFrameTool, BatchAnalyzeFramesTool
+import os
+import litellm
+
 
 class ExecutorAgent:
     @staticmethod
@@ -23,7 +26,13 @@ class ExecutorAgent:
             verbose=True,
             allow_delegation=False,
             tools=[scene_detection_tool, extract_frames_tool, analyze_frame_tool, batch_analyze_frames_tool],
-            llm_config={"model": "gemini-1.5-flash"}
+            llm=LLM(
+                model="gemini-1.5-flash",
+                api_key=os.environ.get('OPENAI_API_KEY'),
+                base_url=os.environ.get('OPENAI_BASE_URL'),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return executor

@@ -1,6 +1,8 @@
 # agents/director_agent.py
-from crewai import Agent
+from crewai import Agent, LLM
 from tools.video_analysis import AnalyzeVideoQualityTool, GetVideoInfoTool
+import os
+
 
 class DirectorAgent:
     @staticmethod
@@ -20,7 +22,13 @@ class DirectorAgent:
             verbose=True,
             allow_delegation=False,
             tools=[video_analysis_tool, video_info_tool],
-            llm_config={"model": "gemini-1.5-pro"}
+            llm=LLM(
+                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                api_key=os.environ.get('OPENAI_API_KEY'),
+                base_url=os.environ.get('OPENAI_BASE_URL'),
+                temperature=0.7,
+                custom_llm_provider="openai"
+            )
         )
         
         return director
