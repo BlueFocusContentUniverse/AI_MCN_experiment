@@ -97,14 +97,15 @@ class EditingPlanningAgent:
         # 创建 Agent
         editing_planning_agent = Agent(
             role="视频剪辑规划专家",
-            goal="规划视频剪辑，为每个口播分段选择合适的视频素材",
+            goal="规划视频剪辑，为每个口播分段选择合适的视频素材（每段口播需要多段素材(每条素材2-10秒）进行组合剪辑呈现效果，适用于短视频平台的快节奏）",
             backstory="""你是一名资深的视频剪辑师和创意总监，擅长规划视频剪辑流程。
             你熟悉各种剪辑技巧和视觉语言，能够将口播内容与视觉素材完美结合。
             你的工作是为每个口播分段选择最合适的视频素材，并规划精确的剪辑点，
             确保最终的视频在视听上协调一致，能够有效传达信息和情感。
             特别是对于汽车相关视频，你能够选择最能展现车辆特点和魅力的素材，
             并使用专业的剪辑手法增强视觉冲击力。
-            注意根据视频节奏和剪辑需求，**每段口播需要多段素材(每条素材2-15秒）进行组合剪辑呈现效果，适用于短视频平台**""",
+            注意根据视频节奏和剪辑需求，**每段口播需要多段素材(每条素材2-10秒）进行组合剪辑呈现效果，适用于短视频平台**""",
+            use_system_prompt=False,
             verbose=True,
             allow_delegation=False,
             tools=[editing_plan_tool, load_analysis_tool],
@@ -112,7 +113,7 @@ class EditingPlanningAgent:
                 model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
                 api_key=os.environ.get('OPENAI_API_KEY'),
                 base_url=os.environ.get('OPENAI_BASE_URL'),
-                temperature=0.7,
+                temperature=0.1,
                 custom_llm_provider="openai",
                 timeout=180
             )

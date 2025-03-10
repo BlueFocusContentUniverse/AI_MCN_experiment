@@ -347,6 +347,7 @@ class VideoProductionService:
 1. 每个音频分段对应的视频素材路径
 2. 视频的开始和结束时间点
 3. 选择该片段的理由
+4. 每段口播需要多段素材(每条素材2-10秒）进行组合剪辑呈现效果，适用于短视频平台
  output format：{
     "segments": [
         {
@@ -355,9 +356,23 @@ class VideoProductionService:
             "start_time": 0.0,
             "end_time": 10.0,
             "reason": "选择这段视频的原因"
+        },
+        {
+            "segment_id": "1",
+            "video_path": "video2.mp4",
+            "start_time": 25.0,
+            "end_time": 35.0,
+            "reason": "选择这段视频的原因"
+        },
+        {
+            "segment_id": "2",
+            "video_path": "video3.mp4",
+            "start_time": 40.0,
+            "end_time": 50.0,
+            "reason": "选择这段视频的原因"
         }
     ]
-}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析"""
+}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析，**output format**内禁止出现换行符！"""
         )
         
         # 创建Crew并执行任务
@@ -368,21 +383,77 @@ class VideoProductionService:
             process=Process.sequential
         )
         
-        # 执行规划
-        result = editing_planning_crew.kickoff()
+        # 执行规划，添加重试机制
+        max_retries = 3
+        retry_delay = 2  # 秒
+        result = None
+        
+        for attempt in range(max_retries):
+            try:
+                # 执行规划
+                result = editing_planning_crew.kickoff()
+                # 如果成功，跳出循环
+                break
+            except ValueError as e:
+                # 检查是否是空响应错误
+                if "Invalid response from LLM call - None or empty" in str(e):
+                    print(f"⚠️ LLM返回空响应，尝试 {attempt + 1}/{max_retries}。等待 {retry_delay} 秒后重试...")
+                    if attempt < max_retries - 1:  # 如果不是最后一次尝试
+                        import time
+                        time.sleep(retry_delay)
+                    else:
+                        print("❌ 多次尝试后仍然失败，将使用基本编辑计划。")
+                        # 创建一个基本的编辑计划
+                        result = {
+                            "segments": [],
+                            "error": "LLM多次返回空响应，无法生成编辑计划"
+                        }
+                        # 为每个音频分段创建一个基本的编辑计划项
+                        for i, segment in enumerate(simplified_audio_segments):
+                            # 尝试从材料中获取第一个可用的视频
+                            video_path = "placeholder.mp4"  # 默认占位符
+                            try:
+                                # 尝试从materials中提取第一个视频路径
+                                if isinstance(materials, dict) and "materials" in materials:
+                                    if isinstance(materials["materials"], list) and len(materials["materials"]) > 0:
+                                        first_material = materials["materials"][0]
+                                        if "video_path" in first_material:
+                                            video_path = first_material["video_path"]
+                            except Exception:
+                                pass  # 如果提取失败，使用默认占位符
+                                
+                            result["segments"].append({
+                                "segment_id": str(segment.get("segment_id", i+1)),
+                                "video_path": video_path,
+                                "start_time": 0.0,
+                                "end_time": segment.get("duration", 10.0),
+                                "reason": "由于LLM响应失败，自动生成的基本编辑计划"
+                            })
+                else:
+                    # 如果是其他错误，记录并重新抛出
+                    print(f"❌ 执行编辑规划时出错: {str(e)}")
+                    raise
         
         # 处理结果
         raw_output = ""
-        if hasattr(result, 'raw'):
-            raw_output = result.raw
-        else:
-            raw_output = str(result)
+        if result:
+            if hasattr(result, 'raw'):
+                raw_output = result.raw
+            else:
+                raw_output = str(result)
         
         # 创建基本结构
         editing_plan = {
             "segments": [],
             "audio_segments": simplified_audio_segments
         }
+        
+        # 如果result是字典且已包含segments，直接使用
+        if isinstance(result, dict) and "segments" in result:
+            editing_plan["segments"] = result["segments"]
+            if "error" in result:
+                editing_plan["error"] = result["error"]
+            return editing_plan
         
         # 尝试解析JSON部分
         try:
