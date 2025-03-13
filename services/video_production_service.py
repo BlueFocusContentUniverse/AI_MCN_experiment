@@ -122,7 +122,7 @@ class VideoProductionService:
             print(f"❌ {method_name} 处理结果时出错: {e}")
             return {"error": f"处理错误: {str(e)}", "raw_output": str(result)}
     
-    def produce_video(self, script: str, target_duration: float = 60.0, style: str = "汽车广告") -> Dict[str, Any]:
+    def produce_video(self, script: str, target_duration: float = 60.0, style: str = "汽车广告", special_requirements: str = "") -> Dict[str, Any]:
         """
         根据口播稿生产视频
         
@@ -130,6 +130,7 @@ class VideoProductionService:
         script: 口播稿文本
         target_duration: 目标视频时长（秒）
         style: 视频风格
+        special_requirements: 特殊需求，将添加到任务描述中
         
         返回:
         生产结果，包含最终视频路径和相关信息
@@ -151,7 +152,7 @@ class VideoProductionService:
         
         # 2. 分析脚本，使用实际音频时长作为目标时长
         print("分析脚本，生成视频需求清单...")
-        requirements = self._analyze_script(script, actual_duration, style)
+        requirements = self._analyze_script(script, actual_duration, style, special_requirements)
         
         # 保存需求清单
         requirements_file = os.path.join(self.output_dir, f"{project_name}_requirements.json")
@@ -160,7 +161,7 @@ class VideoProductionService:
         
         # 3. 搜索素材
         print("搜索匹配的视频素材...")
-        materials = self._search_materials(requirements)
+        materials = self._search_materials(requirements, special_requirements)
         
         # 保存素材信息
         materials_file = os.path.join(self.output_dir, f"{project_name}_materials.json")
@@ -169,7 +170,7 @@ class VideoProductionService:
             
         # 4. 规划剪辑
         print("规划视频剪辑...")
-        editing_plan = self._plan_editing(audio_segments, materials)
+        editing_plan = self._plan_editing(audio_segments, materials, special_requirements)
         
         # 保存剪辑规划
         editing_plan_file = os.path.join(self.output_dir, f"{project_name}_editing_plan.json")
@@ -230,7 +231,7 @@ class VideoProductionService:
         
         return audio_segments
     
-    def _analyze_script(self, script: str, target_duration: float, style: str) -> Dict[str, Any]:
+    def _analyze_script(self, script: str, target_duration: float, style: str, special_requirements: str = "") -> Dict[str, Any]:
         """
         分析脚本，生成视频需求清单
         
@@ -238,10 +239,14 @@ class VideoProductionService:
         script: 口播稿文本
         target_duration: 目标视频时长（秒），基于实际生成的音频时长
         style: 视频风格
+        special_requirements: 特殊需求，将添加到任务描述中
         
         返回:
         视频需求清单
         """
+        # 添加特殊需求到描述中
+        special_req_text = f"\n\n特殊需求: {special_requirements}" if special_requirements else ""
+        
         # 创建脚本分析任务
         analyze_script_task = Task(
             description=f"""分析以下口播稿，生成视频需求清单：
@@ -249,7 +254,7 @@ class VideoProductionService:
 {script}
 
 目标视频时长：{target_duration}秒（基于实际生成的音频时长）
-视频风格：{style}
+视频风格：{style}{special_req_text}
 
 请详细分析每个段落需要的视觉元素、场景类型、情绪基调等。
 输出应包含每个段落的具体需求，以便后续搜索匹配的视频素材。""",
@@ -271,7 +276,7 @@ class VideoProductionService:
         # 使用通用JSON解析方法
         return self._safe_parse_json(result, "_analyze_script")
     
-    def _search_materials(self, requirements: Dict[str, Any]) -> Dict[str, Any]:
+    def _search_materials(self, requirements: Dict[str, Any], special_requirements: str = "") -> Dict[str, Any]:
         """搜索匹配的视频素材"""
         # 提取需求列表
         if "requirements" in requirements and isinstance(requirements["requirements"], list):
@@ -280,6 +285,9 @@ class VideoProductionService:
             # 尝试从原始结果中提取
             req_list = [requirements]
         
+        # 添加特殊需求到描述中
+        special_req_text = f"\n\n特殊需求: {special_requirements}" if special_requirements else ""
+        
         # 创建素材搜索任务
         search_materials_task = Task(
             description=f"""根据以下视频需求清单，搜索匹配的视频素材：
@@ -287,7 +295,7 @@ class VideoProductionService:
 {json.dumps(req_list, ensure_ascii=False, indent=2)}
 
 请为每个需求找到最匹配的视频素材，考虑场景类型、视觉元素、情绪基调等因素。
-每个需求返回最多5个匹配的素材。""",
+每个需求返回最多5个匹配的素材。{special_req_text}""",
             agent=self.material_search_agent,
             expected_output="匹配的视频素材列表，包括每个素材的路径、基本信息和内容标签、帧分析结果的文件路径（frames_analysis_file）的**严格json格式，json内禁止出现换行符！**，不要输出任何多余信息，否则我的代码无法解析"
         )
@@ -306,7 +314,7 @@ class VideoProductionService:
         # 使用通用JSON解析方法
         return self._safe_parse_json(result, "_search_materials")
     
-    def _plan_editing(self, audio_segments: List[Dict[str, Any]], materials: Any) -> Dict[str, Any]:
+    def _plan_editing(self, audio_segments: List[Dict[str, Any]], materials: Any, special_requirements: str = "") -> Dict[str, Any]:
         """规划视频剪辑"""
         # 简化音频分段数据，只保留必要信息
         simplified_audio_segments = []
@@ -318,6 +326,9 @@ class VideoProductionService:
                 "audio_file": segment.get("audio_file", "")
             }
             simplified_audio_segments.append(simplified_segment)
+        
+        # 添加特殊需求到描述中
+        special_req_text = f"\n\n特殊需求: {special_requirements}" if special_requirements else ""
         
         # 创建剪辑规划任务，使用更简洁的描述
         plan_editing_task = Task(
@@ -332,7 +343,7 @@ class VideoProductionService:
 - 每个视频素材都有视频路径(video_path)和帧分析文件路径(frames_analysis_file)
 
 你的任务是为每个音频分段选择最合适的视频素材，并规划剪辑点。
-请使用LoadFramesAnalysisFromFile工具加载每个素材的帧分析结果，了解视频内容。
+请使用LoadFramesAnalysisFromFile工具加载每个素材的帧分析结果，了解视频内容。{special_req_text}
 
 音频分段详情：
 {json.dumps(simplified_audio_segments, ensure_ascii=False)}
@@ -348,6 +359,8 @@ class VideoProductionService:
 2. 视频的开始和结束时间点
 3. 选择该片段的理由
 4. 每段口播需要多段素材(每条素材2-10秒）进行组合剪辑呈现效果，适用于短视频平台
+5. 不同的口播视频节奏不同，请根据口播视频的节奏进行剪辑，不要给用户带来不好的观感。
+6. 请确保剪辑视频的连贯性和流畅性，不要给用户带来不好的观感。
  output format：{
     "segments": [
         {

@@ -19,15 +19,17 @@ logger = logging.getLogger(__name__)
 class VideoInfoExtractor:
     """视频信息提取服务，整合语音、视觉和动态信息"""
     
-    def __init__(self, output_dir: str = "./output", skip_mongodb: bool = False):
+    def __init__(self, output_dir: str = "./output", skip_mongodb: bool = False, special_requirements: str = ""):
         """
         初始化视频信息提取服务
         
         参数:
         output_dir: 输出目录
         skip_mongodb: 如果为True，则跳过MongoDB连接
+        special_requirements: 用户指定的特殊需求，将添加到任务描述中
         """
         self.output_dir = output_dir
+        self.special_requirements = special_requirements
         os.makedirs(output_dir, exist_ok=True)
         
         # 初始化服务和Agent
@@ -76,6 +78,8 @@ class VideoInfoExtractor:
         # 2. 提取视觉信息
         logger.info("提取视觉信息...")
         # 创建视觉分析任务
+        special_req_text = f"\n\n用户特殊需求: {self.special_requirements}" if self.special_requirements else ""
+        
         analyze_frames_task = Task(
             description=f"""从视频 {video_path} 中提取关键帧，并使用Gemini进行视觉内容分析。
             
@@ -85,7 +89,7 @@ class VideoInfoExtractor:
             使用均匀采样策略提取最多60帧，并分批处理(每批15帧)进行分析，确保覆盖整个视频。
             重点识别汽车相关场景、场景变化和关键视觉元素。
             
-            在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用这个文件路径。""",
+            在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用这个文件路径。{special_req_text}""",
             expected_output="包含分析摘要和结果文件路径的JSON对象，确保明确指出结果文件的位置。",
             agent=self.vision_agent
         )
@@ -129,7 +133,7 @@ class VideoInfoExtractor:
             5. 汽车展示特点：分析汽车的动态展示方式和速度感表现
             6. 视听结合：分析视觉内容与语音内容的配合方式
             
-            提供专业的电影摄影分析，使用行业术语。""",
+            提供专业的电影摄影分析，使用行业术语。{special_req_text}""",
             expected_output="包含运镜、色调、节奏等动态特征分析的JSON对象，并包含视听结合分析。",
             agent=self.cinematography_agent
         )

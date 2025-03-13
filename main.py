@@ -10,9 +10,9 @@ from services.video_production_service import VideoProductionService
 # 加载环境变量
 load_dotenv()
 
-def extract_video_info(video_path, output_dir="./output", skip_mongodb=False):
+def extract_video_info(video_path, output_dir="./output", skip_mongodb=False, special_requirements=""):
     """提取视频信息"""
-    extractor = VideoInfoExtractor(output_dir=output_dir, skip_mongodb=skip_mongodb)
+    extractor = VideoInfoExtractor(output_dir=output_dir, skip_mongodb=skip_mongodb, special_requirements=special_requirements)
     result = extractor.extract_video_info(video_path)
     
     # 保存结果
@@ -24,10 +24,10 @@ def extract_video_info(video_path, output_dir="./output", skip_mongodb=False):
     print(f"视频信息提取完成，结果已保存到: {result_file}")
     return result
 
-def produce_video(script, target_duration=60.0, style="汽车广告", output_dir="./output"):
+def produce_video(script, target_duration=60.0, style="汽车广告", output_dir="./output", special_requirements=""):
     """生产视频"""
     producer = VideoProductionService(output_dir=output_dir)
-    result = producer.produce_video(script, target_duration, style)
+    result = producer.produce_video(script, target_duration, style, special_requirements)
     
     print(f"视频生产完成，最终视频: {result['final_video']}")
     return result
@@ -42,6 +42,7 @@ def main():
     extract_parser.add_argument("video_path", help="视频文件路径")
     extract_parser.add_argument("--output", "-o", default="./output", help="输出目录")
     extract_parser.add_argument("--skip-mongodb", action="store_true", help="跳过MongoDB连接")
+    extract_parser.add_argument("--special-requirements", "-r", default="", help="特殊分析需求，将添加到任务描述中")
     
     # 生产视频命令
     produce_parser = subparsers.add_parser("produce", help="生产视频")
@@ -49,17 +50,18 @@ def main():
     produce_parser.add_argument("--duration", "-d", type=float, default=60.0, help="目标视频时长（秒）")
     produce_parser.add_argument("--style", "-s", default="汽车广告", help="视频风格")
     produce_parser.add_argument("--output", "-o", default="./output", help="输出目录")
+    produce_parser.add_argument("--special-requirements", "-r", default="", help="特殊需求，将添加到任务描述中")
     
     args = parser.parse_args()
     
     if args.command == "extract":
-        extract_video_info(args.video_path, args.output, args.skip_mongodb)
+        extract_video_info(args.video_path, args.output, args.skip_mongodb, args.special_requirements)
     elif args.command == "produce":
         # 读取口播稿文件
         with open(args.script_file, 'r', encoding='utf-8') as f:
             script = f.read()
         
-        produce_video(script, args.duration, args.style, args.output)
+        produce_video(script, args.duration, args.style, args.output, args.special_requirements)
     else:
         parser.print_help()
 
@@ -93,6 +95,7 @@ if __name__ == "__main__":
         target_duration = 60.0  # 目标视频时长（秒）
         style = "汽车广告"  # 视频风格
         output_dir = "./debug_output"  # 可以设置一个专门用于调试的输出目录
+        special_requirements = "注重展示车辆的动态性能和内饰细节"  # 特殊需求
         
         # 读取口播稿文件
         try:
@@ -107,13 +110,14 @@ if __name__ == "__main__":
             print(f"已创建示例口播稿文件: {script_file}")
 
         # 调用视频生产函数
-        result = produce_video(script, target_duration, style, output_dir)
+        result = produce_video(script, target_duration, style, output_dir, special_requirements)
 
         # 可以在这里添加额外的调试代码
         print("调试信息:")
         print(f"口播稿: {script[:50]}..." if len(script) > 50 else script)
         print(f"目标时长: {target_duration}秒")
         print(f"视频风格: {style}")
+        print(f"特殊需求: {special_requirements}")
         print(f"输出目录: {output_dir}")
         print("生产结果摘要:")
         # 打印结果的一部分关键信息，避免输出过多
