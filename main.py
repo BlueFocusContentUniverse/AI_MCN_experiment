@@ -50,7 +50,7 @@ def main():
     produce_parser.add_argument("--duration", "-d", type=float, default=60.0, help="目标视频时长（秒）")
     produce_parser.add_argument("--style", "-s", default="汽车广告", help="视频风格")
     produce_parser.add_argument("--output", "-o", default="./output", help="输出目录")
-    produce_parser.add_argument("--special-requirements", "-r", default="", help="特殊需求，将添加到任务描述中")
+    produce_parser.add_argument("--special-requirements", "-r", default="", help="特殊需求:将添加到任务描述中")
     
     args = parser.parse_args()
     
