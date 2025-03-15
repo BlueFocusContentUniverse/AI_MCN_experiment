@@ -48,15 +48,15 @@ def read_script(script_path):
     except Exception as e:
         raise ValueError(f"读取口播稿文件失败: {str(e)}")
 
-def process_script(script_path, output_base_dir, preserve_structure, target_duration, style, special_requirements):
+def process_script(script_path, output_base_dir, preserve_structure, target_duration, style, special_requirements, input_dir=None):
     """处理单个口播稿文件"""
     try:
         # 读取口播稿
         script = read_script(script_path)
         
-        if preserve_structure:
+        if preserve_structure and input_dir:
             # 保留原始目录结构
-            rel_path = os.path.relpath(os.path.dirname(script_path), start=args.input_dir)
+            rel_path = os.path.relpath(os.path.dirname(script_path), start=input_dir)
             output_dir = os.path.join(output_base_dir, rel_path)
         else:
             output_dir = output_base_dir
@@ -72,34 +72,24 @@ def process_script(script_path, output_base_dir, preserve_structure, target_dura
         return (script_path, False, None, str(e))
 
 def main():
-    parser = argparse.ArgumentParser(description="批量生产视频")
-    parser.add_argument("--input-dir", "-i", default="./scripts",
-                      help="输入口播稿目录")
-    parser.add_argument("--output-dir", "-o", default="./batch_videos",
-                      help="输出目录")
-    parser.add_argument("--preserve-structure", "-p", action="store_true",
-                      help="保留原始目录结构")
-    parser.add_argument("--parallel", "-j", type=int, default=1,
-                      help="并行处理的视频数量")
-    parser.add_argument("--duration", "-d", type=float, default=60.0,
-                      help="目标视频时长（秒）")
-    parser.add_argument("--style", "-s", default="汽车广告",
-                      help="视频风格")
-    parser.add_argument("--special-requirements", "-r", default="",
-                      help="特殊需求，将添加到任务描述中")
-    
-    global args
-    args = parser.parse_args()
+    # 设置特定参数
+    input_dir = "./list"
+    output_dir = "./batch_videos"  # 使用默认输出目录
+    preserve_structure = True  # 保留目录结构
+    parallel = 1  # 默认单进程处理
+    duration = 60.0  # 默认视频时长60秒
+    style = "搞笑"  # 设置视频风格为搞笑
+    special_requirements = """这次生产任务将用于理想L9的事件营销，即利用反差强调理想L9的安全性，风格是搞笑，所以可以添加网络meme图，这个视频将发布在中国抖音平台上。**必须使用理想L9公关文件夹下的视频，注意画面不要过于跳脱，在保证用户观感的前提下生成搞笑风格视频**"""
     
     # 确保输出目录存在
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     # 查找所有口播稿文件
-    print(f"正在扫描 {args.input_dir} 中的口播稿文件...")
-    script_files = find_all_scripts(args.input_dir)
+    print(f"正在扫描 {input_dir} 中的口播稿文件...")
+    script_files = find_all_scripts(input_dir)
     
     if not script_files:
-        print(f"在 {args.input_dir} 中未找到口播稿文件")
+        print(f"在 {input_dir} 中未找到口播稿文件")
         return
     
     print(f"找到 {len(script_files)} 个口播稿文件")
@@ -108,32 +98,32 @@ def main():
     start_time = time.time()
     
     # 创建日志文件
-    log_file = os.path.join(args.output_dir, "batch_produce.log")
+    log_file = os.path.join(output_dir, "batch_produce.log")
     with open(log_file, "w", encoding="utf-8") as f:
         f.write(f"批量生产开始时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"输入目录: {args.input_dir}\n")
-        f.write(f"输出目录: {args.output_dir}\n")
+        f.write(f"输入目录: {input_dir}\n")
+        f.write(f"输出目录: {output_dir}\n")
         f.write(f"口播稿文件数量: {len(script_files)}\n")
-        f.write(f"目标视频时长: {args.duration}秒\n")
-        f.write(f"视频风格: {args.style}\n")
-        if args.special_requirements:
-            f.write(f"特殊需求: {args.special_requirements}\n")
+        f.write(f"目标视频时长: {duration}秒\n")
+        f.write(f"视频风格: {style}\n")
+        f.write(f"特殊需求: {special_requirements}\n")
         f.write("\n")
     
     # 处理口播稿文件
     results = []
-    if args.parallel > 1:
-        print(f"使用 {args.parallel} 个进程并行处理口播稿...")
-        with ProcessPoolExecutor(max_workers=args.parallel) as executor:
+    if parallel > 1:
+        print(f"使用 {parallel} 个进程并行处理口播稿...")
+        with ProcessPoolExecutor(max_workers=parallel) as executor:
             futures = {
                 executor.submit(
                     process_script, 
                     script_path, 
-                    args.output_dir, 
-                    args.preserve_structure, 
-                    args.duration,
-                    args.style,
-                    args.special_requirements
+                    output_dir, 
+                    preserve_structure, 
+                    duration,
+                    style,
+                    special_requirements,
+                    input_dir  # 传入input_dir参数
                 ): script_path for script_path in script_files
             }
             
@@ -155,11 +145,12 @@ def main():
             print(f"[{i}/{len(script_files)}] 处理: {os.path.basename(script_path)}")
             result = process_script(
                 script_path, 
-                args.output_dir, 
-                args.preserve_structure, 
-                args.duration,
-                args.style,
-                args.special_requirements
+                output_dir, 
+                preserve_structure, 
+                duration,
+                style,
+                special_requirements,
+                input_dir  # 传入input_dir参数
             )
             results.append(result)
             status = '成功' if result[1] else '失败'

@@ -54,7 +54,7 @@ class FishAudioService:
         self.api_url = "https://api.fish.audio/v1/tts"
 
         # 音频生成相关参数
-        self.reference_id = task_params.get('reference_id', '1f38cc50efde487fafbb1f13a9041117')
+        self.reference_id = task_params.get('reference_id', 'f829fe5e290e4dc69fc08aa00b6ca2a0')
         self.mp3_bitrate = task_params.get('mp3_bitrate', 128)
         self.chunk_length = task_params.get('chunk_length', 200)
         self.latency_mode = task_params.get('latency_mode', 'normal')

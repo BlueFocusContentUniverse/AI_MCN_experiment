@@ -4,12 +4,17 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import datetime
 import re
+import subprocess
+import platform
+import traceback
+import shutil
 
 from services.fish_audio_service import FishAudioService
 from agents.script_analysis_agent import ScriptAnalysisAgent
 from agents.material_search_agent import MaterialSearchAgent
 from agents.editing_planning_agent import EditingPlanningAgent
 from services.video_editing_service import VideoEditingService
+from tools.subtitle_tool import SubtitleTool
 from crewai import Task, Crew, Process
 from crewai.llm import LLM
 
@@ -41,6 +46,12 @@ class VideoProductionService:
         self.material_search_agent = MaterialSearchAgent.create()
         self.editing_planning_agent = EditingPlanningAgent.create()
         self.video_editing_service = VideoEditingService(output_dir=self.segments_dir)
+        
+        # 初始化字幕工具
+        self.subtitle_tool = SubtitleTool()
+        
+        # 添加token使用记录
+        self.token_usage_records = []
         
         # self.llm = LLM(
         #     model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -122,6 +133,43 @@ class VideoProductionService:
             print(f"❌ {method_name} 处理结果时出错: {e}")
             return {"error": f"处理错误: {str(e)}", "raw_output": str(result)}
     
+    def _record_token_usage(self, result, task_name: str):
+        """
+        记录CrewOutput中的token_usage信息
+        
+        参数:
+        result: CrewOutput对象
+        task_name: 任务名称
+        """
+        try:
+            # 检查result是否有token_usage属性
+            if hasattr(result, 'token_usage') and result.token_usage:
+                usage_record = {
+                    "task_name": task_name,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "token_usage": result.token_usage
+                }
+                
+                # 将字典转换为可序列化的格式
+                if isinstance(usage_record["token_usage"], dict):
+                    # 已经是字典，不需要转换
+                    pass
+                else:
+                    # 尝试转换为字典
+                    try:
+                        usage_record["token_usage"] = usage_record["token_usage"].dict()
+                    except AttributeError:
+                        # 如果没有dict方法，尝试使用__dict__
+                        usage_record["token_usage"] = vars(usage_record["token_usage"])
+                
+                # 添加到记录列表
+                self.token_usage_records.append(usage_record)
+                print(f"已记录 {task_name} 的token使用情况: {usage_record['token_usage']}")
+            else:
+                print(f"警告: {task_name} 的结果中没有token_usage信息")
+        except Exception as e:
+            print(f"记录token使用情况时出错: {str(e)}")
+    
     def produce_video(self, script: str, target_duration: float = 60.0, style: str = "汽车广告", special_requirements: str = "") -> Dict[str, Any]:
         """
         根据口播稿生产视频
@@ -181,6 +229,10 @@ class VideoProductionService:
         print("执行视频剪辑...")
         final_video = self._execute_editing(editing_plan, project_name)
         
+        # 6. 添加字幕
+        print("处理音频并添加字幕...")
+        final_video_with_subtitles = self._add_subtitles_to_video(final_video, project_name)
+        
         # 返回结果
         result = {
             "project_name": project_name,
@@ -201,7 +253,8 @@ class VideoProductionService:
                 "data": editing_plan,
                 "file": editing_plan_file
             },
-            "final_video": final_video
+            "final_video": final_video_with_subtitles,
+            "token_usage_records": self.token_usage_records  # 添加token使用记录
         }
         
         # 保存完整结果
@@ -209,7 +262,12 @@ class VideoProductionService:
         with open(result_file, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        print(f"视频生产完成: {final_video}")
+        # 保存token使用记录到单独的文件
+        token_usage_file = os.path.join(self.final_dir, f"{project_name}_token_usage.json")
+        with open(token_usage_file, 'w', encoding='utf-8') as f:
+            json.dump(self.token_usage_records, f, ensure_ascii=False, indent=2)
+        
+        print(f"视频生产完成: {final_video_with_subtitles}")
         return result
     
     def _generate_audio_segments(self, script: str) -> List[Dict[str, Any]]:
@@ -259,7 +317,20 @@ class VideoProductionService:
 请详细分析每个段落需要的视觉元素、场景类型、情绪基调等。
 输出应包含每个段落的具体需求，以便后续搜索匹配的视频素材。""",
             agent=self.script_analysis_agent,
-            expected_output="详细的视频需求清单，包括每个段落需要的视觉元素、场景类型、情绪基调等的**严格json格式，json内禁止出现换行符！**"
+            expected_output="""详细的视频需求清单，包括每个段落需要的视觉元素、场景类型、情绪基调等的**严格json格式，json内禁止出现换行符！**
+            输出为json格式以便下一个Agent可以拿到结果并处理，json内禁止出现换行符！
+            输出格式{
+                "requirements": [
+                    {
+                        "segment_id": "1",
+                        "text": "段落文本",
+                        "visual_elements": "视觉元素",
+                        "scene_type": "场景类型",
+                        "description": "描述"
+                    }
+                ]
+            }""",
+
         )
         
         # 创建Crew并执行任务
@@ -272,6 +343,9 @@ class VideoProductionService:
         
         # 执行分析
         result = script_analysis_crew.kickoff()
+        
+        # 记录token使用情况
+        self._record_token_usage(result, "脚本分析")
         
         # 使用通用JSON解析方法
         return self._safe_parse_json(result, "_analyze_script")
@@ -295,7 +369,7 @@ class VideoProductionService:
 {json.dumps(req_list, ensure_ascii=False, indent=2)}
 
 请为每个需求找到最匹配的视频素材，考虑场景类型、视觉元素、情绪基调等因素。
-每个需求返回最多5个匹配的素材。{special_req_text}""",
+每个需求返回最多2个匹配的素材。{special_req_text}""",
             agent=self.material_search_agent,
             expected_output="匹配的视频素材列表，包括每个素材的路径、基本信息和内容标签、帧分析结果的文件路径（frames_analysis_file）的**严格json格式，json内禁止出现换行符！**，不要输出任何多余信息，否则我的代码无法解析"
         )
@@ -310,6 +384,9 @@ class VideoProductionService:
         
         # 执行搜索
         result = material_search_crew.kickoff()
+        
+        # 记录token使用情况
+        self._record_token_usage(result, "素材搜索")
         
         # 使用通用JSON解析方法
         return self._safe_parse_json(result, "_search_materials")
@@ -358,7 +435,7 @@ class VideoProductionService:
 1. 每个音频分段对应的视频素材路径
 2. 视频的开始和结束时间点
 3. 选择该片段的理由
-4. 每段口播需要多段素材(每条素材2-10秒）进行组合剪辑呈现效果，适用于短视频平台
+4. 每段口播需要多段素材(**每条素材必须长于2秒！！！**）进行组合剪辑呈现效果，但如果口播内容较少（不超过6秒），则只需要一条素材即可。
 5. 不同的口播视频节奏不同，请根据口播视频的节奏进行剪辑，不要给用户带来不好的观感。
 6. 请确保剪辑视频的连贯性和流畅性，不要给用户带来不好的观感。
  output format：{
@@ -405,6 +482,10 @@ class VideoProductionService:
             try:
                 # 执行规划
                 result = editing_planning_crew.kickoff()
+                
+                # 记录token使用情况
+                self._record_token_usage(result, "剪辑规划")
+                
                 # 如果成功，跳出循环
                 break
             except ValueError as e:
@@ -550,4 +631,241 @@ class VideoProductionService:
         # 执行剪辑
         final_video = self.video_editing_service.execute_editing_plan(editing_plan, output_file)
         
-        return final_video 
+        return final_video
+    
+    def _add_subtitles_to_video(self, video_file: str, project_name: str) -> str:
+        """
+        为视频添加字幕
+        
+        参数:
+        video_file: 视频文件路径
+        project_name: 项目名称
+        
+        返回:
+        添加字幕后的视频文件路径
+        """
+        try:
+            print("开始处理音频并添加字幕...")
+            
+            # 设置输出文件名
+            output_filename = f"{project_name}_with_subtitles"
+            
+            # 使用SubtitleTool处理视频并添加字幕
+            final_video = self.subtitle_tool.process_video_with_subtitles(
+                video_file=video_file,
+                output_dir=self.final_dir,
+                output_filename=output_filename
+            )
+            
+            return final_video
+            
+        except Exception as e:
+            print(f"添加字幕时出错: {str(e)}")
+            traceback.print_exc()  # 打印详细的错误堆栈
+            # 如果出错，返回原始视频
+            return video_file
+
+
+class FishSpeechRecognizer:
+    """Fish Audio 语音识别服务"""
+    
+    def __init__(self):
+        """初始化 Fish Audio ASR 服务"""
+
+        
+        self.api_key = os.environ.get('FISH_AUDIO_API_KEY')
+        
+        if not self.api_key:
+            raise ValueError("请设置 Fish Audio api key")
+        
+        self.api_url = "https://api.fish.audio/v1/asr"
+    
+    def transcribe_audio(self, audio_file_path: str):
+        """同步调用 Fish Audio ASR API 进行音频转写"""
+        try:
+            import httpx
+            import ormsgpack
+            
+            # 读取音频文件
+            with open(audio_file_path, "rb") as audio_file:
+                audio_data = audio_file.read()
+            
+            # 准备请求数据
+            request_data = {
+                "audio": audio_data,
+                "language": "zh",  # 指定语言为中文
+                "ignore_timestamps": False  # 获取精确时间戳
+            }
+            
+            # 发送请求
+            with httpx.Client() as client:
+                response = client.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/msgpack",
+                    },
+                    content=ormsgpack.packb(request_data),
+                    timeout=None  # 对于长音频，可能需要较长时间
+                )
+                
+                # 检查响应状态
+                response.raise_for_status()
+                
+                # 解析响应
+                result = response.json()
+                
+                print("Fish Audio ASR 响应:", result)
+                return result
+                
+        except Exception as e:
+            raise RuntimeError(f"Fish Audio ASR API 调用失败: {str(e)}")
+    
+    def transcribe_video_audio(self, audio_path: str, output_dir: str):
+        """处理音频文件并保存结果"""
+        try:
+            # 直接转写音频
+            transcription = self.transcribe_audio(audio_path)
+            print("Transcription type:", type(transcription))  # 添加调试信息
+            
+            # 初始化结果列表
+            simplified_segments = []
+            
+            # 处理音频开始的静音部分
+            if 'segments' in transcription and len(transcription['segments']) > 0:
+                first_segment = transcription['segments'][0]
+                if first_segment['start'] > 0:
+                    simplified_segments.append({
+                        "start": 0,
+                        "end": first_segment['start'],
+                        "text": ""
+                    })
+            
+            # 定义中文标点符号列表
+            punctuation_marks = ['。', '！', '？', '；', '，',  '!', '?', ';', ',']
+            
+            # 处理所有segments和它们之间的间隔
+            for i, segment in enumerate(transcription['segments']):
+                text = segment['text']
+                start_time = segment['start']
+                end_time = segment['end']
+                duration = end_time - start_time
+                
+                # 如果文本为空，直接添加原始segment
+                if not text.strip():
+                    simplified_segments.append({
+                        "start": start_time,
+                        "end": end_time,
+                        "text": text
+                    })
+                    continue
+                
+                # 计算每个字符的平均时长
+                chars_count = len(text)
+                time_per_char = duration / chars_count if chars_count > 0 else 0
+                
+                # 根据标点符号拆分文本
+                sub_segments = []
+                last_cut = 0
+                
+                # 查找所有标点符号位置
+                for j, char in enumerate(text):
+                    if char in punctuation_marks or j == len(text) - 1:
+                        # 如果是最后一个字符且不是标点，需要包含这个字符
+                        end_idx = j + 1
+                        sub_text = text[last_cut:end_idx]
+                        
+                        # 计算这部分文本的时长和时间戳
+                        sub_duration = len(sub_text) * time_per_char
+                        sub_start = start_time + last_cut * time_per_char
+                        sub_end = sub_start + sub_duration
+                        
+                        # 添加到子segments列表
+                        sub_segments.append({
+                            "start": sub_start,
+                            "end": sub_end,
+                            "text": sub_text
+                        })
+                        
+                        # 更新下一段的起始位置
+                        last_cut = end_idx
+                
+                # 如果没有找到任何标点符号，使用原始segment
+                if not sub_segments:
+                    simplified_segments.append({
+                        "start": start_time,
+                        "end": end_time,
+                        "text": text
+                    })
+                else:
+                    # 按字数限制进行二次分割
+                    final_segments = []
+                    max_chars = 15  # 最大字符数限制
+                    
+                    for sub_seg in sub_segments:
+                        sub_text = sub_seg["text"]
+                        sub_start = sub_seg["start"]
+                        sub_end = sub_seg["end"]
+                        
+                        # 如果文本长度超过限制，进行分割
+                        if len(sub_text) > max_chars:
+                            # 计算分割点（尽量在中间位置）
+                            mid_point = len(sub_text) // 2
+                            
+                            # 分割文本
+                            first_part = sub_text[:mid_point]
+                            second_part = sub_text[mid_point:]
+                            
+                            # 计算每部分的时间戳
+                            first_duration = len(first_part) * time_per_char
+                            first_end = sub_start + first_duration
+                            
+                            # 添加两部分到最终列表
+                            final_segments.append({
+                                "start": sub_start,
+                                "end": first_end,
+                                "text": first_part
+                            })
+                            final_segments.append({
+                                "start": first_end,
+                                "end": sub_end,
+                                "text": second_part
+                            })
+                        else:
+                            # 文本长度在限制内，直接添加
+                            final_segments.append(sub_seg)
+                    
+                    # 添加所有处理后的子segments
+                    simplified_segments.extend(final_segments)
+                
+                # 检查与下一个segment之间是否有间隔
+                if i < len(transcription['segments']) - 1:
+                    next_segment = transcription['segments'][i + 1]
+                    if next_segment['start'] > segment['end']:
+                        simplified_segments.append({
+                            "start": segment['end'],
+                            "end": next_segment['start'],
+                            "text": ""
+                        })
+            
+            # 处理最后一个segment之后的静音部分
+            if transcription['segments']:
+                last_segment = transcription['segments'][-1]
+                if last_segment['end'] < transcription['duration']:
+                    simplified_segments.append({
+                        "start": last_segment['end'],
+                        "end": transcription['duration'],
+                        "text": ""
+                    })
+            
+            # 保存转写结果
+            audio_name = os.path.splitext(os.path.basename(audio_path))[0]
+            output_path = os.path.join(output_dir, f"{audio_name}_fish_analysis_results.json")
+            
+            # 同步写入 JSON 文件
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(simplified_segments, f, ensure_ascii=False, indent=2)
+            
+            return simplified_segments
+        except Exception as e:
+            raise RuntimeError(f"处理音频失败: {str(e)}") 
