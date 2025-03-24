@@ -6,6 +6,7 @@ from services.mongodb_service import MongoDBService
 import os
 import numpy as np
 from services.embedding_service import EmbeddingService  # 假设有这样一个服务来获取嵌入向量
+from tools.text_matching_tool import TextMatchingTool
 
 
 class MaterialSearchInput(BaseModel):
@@ -119,23 +120,22 @@ class MaterialSearchAgent:
         """创建素材搜索 Agent"""
         # 创建工具实例
         material_search_tool = MaterialSearchTool()
+        text_matching_tool = TextMatchingTool()  # 添加文本匹配工具
         
         # 创建 Agent
         material_search_agent = Agent(
-            role="视频素材专家",
-            goal="根据视频需求搜索最匹配的素材，按要求输出为json格式以便下一个Agent可以拿到结果并处理",
-            backstory="""你是一名专业的视频素材管理专家，擅长从海量素材库中找到最匹配需求的视频片段。
-            你熟悉各种视频类型和风格，能够根据场景描述、视觉元素、情绪基调等要求，
-            精准定位合适的素材。你的工作是为视频制作团队提供高质量的素材选择，
-            确保最终的视频能够达到预期的视觉效果。特别是对于汽车相关视频，
-            你能够找到最能展现车辆特点和魅力的素材。
-            注意，在寻找素材时务必确保视频素材和需求高度匹配，**根据视频名称可判断该视频所属汽车品牌**，**汽车品牌和视频需求中的品牌必须匹配，如本田ZRV，小米SU7，特斯拉Model3等**，否则不返回结果
-            输出为json格式以便下一个Agent可以拿到结果并处理，json内禁止出现换行符！""",
+            role="视频素材搜索专家",
+            goal="搜索匹配的视频素材，包括原话匹配和画面匹配",
+            backstory="""你是一名资深的视频素材搜索专家，擅长根据需求查找最合适的视频素材。
+            你熟悉各种视频类型和内容标签，能够精确匹配视觉元素和场景类型。
+            你的工作是为每个需求找到最匹配的视频素材，包括原话匹配（需要在数据库中查找包含特定文本的视频片段）
+            和画面匹配（需要根据视觉描述查找合适的视频素材）。
+            你会考虑场景类型、视觉元素、情绪基调等因素，确保找到的素材能够准确表达需求的内容和情感。""",
             verbose=True,
             allow_delegation=False,
-            tools=[material_search_tool],
+            tools=[material_search_tool, text_matching_tool],  # 添加文本匹配工具
             llm=LLM(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="gemini-1.5-pro",
                 api_key=os.environ.get('OPENAI_API_KEY'),
                 base_url=os.environ.get('OPENAI_BASE_URL'),
                 temperature=0.1,

@@ -68,7 +68,7 @@ def main():
 if __name__ == "__main__":
     # if len(sys.argv) == 1:
     #     # 设置调试参数
-    #     video_path = "temp1.mp4"
+    #     video_path = "/home/jinpeng/multi-agent/李想公关/13_part2.mp4"
     #     output_dir = "./debug_output"  # 可以设置一个专门用于调试的输出目录
     #     skip_mongodb = False  # 调试时可能想跳过数据库连接
 
@@ -91,11 +91,11 @@ if __name__ == "__main__":
     # 调试模式
     if len(sys.argv) == 1:
         # 设置调试参数 - 视频生产
-        script_file = "./debug_script.txt"  # 口播稿文件路径
+        script_file = "./list/3.txt"  # 口播稿文件路径
         target_duration = 60.0  # 目标视频时长（秒）
-        style = "汽车广告"  # 视频风格
+        style = "营销号"  # 视频风格
         output_dir = "./debug_output"  # 可以设置一个专门用于调试的输出目录
-        special_requirements = "注重展示车辆的动态性能和内饰细节"  # 特殊需求
+        special_requirements = "这次生产任务将用于理想创始人李想的个人营销，目的是扩大李想的影响力，**必须使用李想公关文件夹下的视频！！！**"  # 特殊需求
         
         # 读取口播稿文件
         try:

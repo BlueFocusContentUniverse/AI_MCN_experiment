@@ -76,11 +76,10 @@ def main():
     input_dir = "./list"
     output_dir = "./batch_videos"  # 使用默认输出目录
     preserve_structure = True  # 保留目录结构
-    parallel = 1  # 默认单进程处理
+    parallel = 3  # 默认单进程处理
     duration = 60.0  # 默认视频时长60秒
     style = "搞笑"  # 设置视频风格为搞笑
-    special_requirements = """这次生产任务将用于理想L9的事件营销，即利用反差强调理想L9的安全性，风格是搞笑，所以可以添加网络meme图，这个视频将发布在中国抖音平台上。**必须使用理想L9公关文件夹下的视频，注意画面不要过于跳脱，在保证用户观感的前提下生成搞笑风格视频**"""
-    
+    special_requirements = """这次生产任务将用于理想创始人李想的个人营销，目的是扩大李想的影响力，**必须使用李想公关文件夹下的视频！！！**"""
     # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
     

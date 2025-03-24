@@ -30,7 +30,7 @@ class FusionAgent:
             allow_delegation=False,
             tools=[fuse_analysis_tool, load_analysis_tool],
             llm=LLM(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="gemini-1.5-pro",
                 api_key=os.environ.get('OPENAI_API_KEY'),
                 base_url=os.environ.get('OPENAI_BASE_URL'),
                 temperature=0.7,

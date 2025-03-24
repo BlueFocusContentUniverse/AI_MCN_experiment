@@ -112,7 +112,7 @@ class EditingPlanningAgent:
             allow_delegation=False,
             tools=[editing_plan_tool, load_analysis_tool],
             llm=LLM(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+                model="gpt-4o-mini",
                 api_key=os.environ.get('OPENAI_API_KEY'),
                 base_url=os.environ.get('OPENAI_BASE_URL'),
                 temperature=0.1,

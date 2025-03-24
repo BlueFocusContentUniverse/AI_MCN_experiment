@@ -46,7 +46,7 @@ def process_video(video_path, output_base_dir, preserve_structure, skip_mongodb,
 
 def main():
     parser = argparse.ArgumentParser(description="批量处理视频文件")
-    parser.add_argument("--input-dir", "-i", default="/home/jinpeng/multi-agent/slice_for_video/video_input",
+    parser.add_argument("--input-dir", "-i", default="/home/jinpeng/multi-agent/李想公关",
                       help="输入视频目录")
     parser.add_argument("--output-dir", "-o", default="./batch_output",
                       help="输出目录")

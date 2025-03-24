@@ -54,7 +54,7 @@ class VideoProductionService:
         self.token_usage_records = []
         
         # self.llm = LLM(
-        #     model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        #     model="gemini-1.5-pro",
         #     api_key=os.environ.get('OPENAI_API_KEY'),
         #     base_url=os.environ.get('OPENAI_BASE_URL'),
         #     temperature=0.7,
@@ -230,8 +230,8 @@ class VideoProductionService:
         final_video = self._execute_editing(editing_plan, project_name)
         
         # 6. 添加字幕
-        print("处理音频并添加字幕...")
-        final_video_with_subtitles = self._add_subtitles_to_video(final_video, project_name)
+        # print("处理音频并添加字幕...")
+        # final_video_with_subtitles = self._add_subtitles_to_video(final_video, project_name)
         
         # 返回结果
         result = {
@@ -462,7 +462,7 @@ class VideoProductionService:
             "reason": "选择这段视频的原因"
         }
     ]
-}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析，**output format**内禁止出现换行符！"""
+}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析，**output format**内禁止出现换行符！视频素材总时长必须匹配音频总时长！！！"""
         )
         
         # 创建Crew并执行任务

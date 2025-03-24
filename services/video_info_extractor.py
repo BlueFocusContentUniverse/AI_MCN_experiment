@@ -48,6 +48,48 @@ class VideoInfoExtractor:
                 logger.warning(f"MongoDB连接失败: {str(e)}")
                 logger.warning("将跳过数据持久化到MongoDB")
     
+    def _format_transcription(self, transcription: Dict[str, Any]) -> str:
+        """
+        将转录内容格式化为适合任务描述的字符串
+        
+        参数:
+        transcription: 转录结果字典
+        
+        返回:
+        格式化后的字符串
+        """
+        if not transcription:
+            return "无转录内容"
+        
+        formatted_text = ""
+        
+        # 如果有text字段，直接使用
+        if "text" in transcription:
+            formatted_text = f"完整转录: {transcription['text']}\n\n"
+        
+        # 如果有segments字段，添加带时间戳的分段
+        if "segments" in transcription and isinstance(transcription["segments"], list):
+            formatted_text += "分段转录:\n"
+            for segment in transcription["segments"]:
+                try:
+                    # 检查segment是否为字典类型
+                    if isinstance(segment, dict):
+                        start = segment.get("start", 0)
+                        end = segment.get("end", 0)
+                        text = segment.get("text", "")
+                    else:
+                        # 假设segment是一个对象，直接访问属性
+                        start = getattr(segment, "start", 0)
+                        end = getattr(segment, "end", 0)
+                        text = getattr(segment, "text", "")
+                    
+                    formatted_text += f"[{start:.2f}s - {end:.2f}s]: {text}\n"
+                except Exception as e:
+                    logger.warning(f"处理转录分段时出错: {str(e)}")
+                    continue
+        
+        return formatted_text
+    
     def extract_video_info(self, video_path: str) -> Dict[str, Any]:
         """
         提取视频信息，包括语音、视觉和动态信息
@@ -75,6 +117,9 @@ class VideoInfoExtractor:
         logger.info("提取语音信息...")
         transcription = self.transcription_service.transcribe_video(video_path)
         
+        # 格式化转录内容，用于任务描述
+        formatted_transcription = self._format_transcription(transcription)
+        
         # 2. 提取视觉信息
         logger.info("提取视觉信息...")
         # 创建视觉分析任务
@@ -86,7 +131,7 @@ class VideoInfoExtractor:
             重要提示：你必须使用BatchProcessingFrames工具来处理视频，该工具会自动执行分批处理，确保所有帧都被分析。
             该工具会将完整的分析结果保存到文件中，并返回文件路径。
             
-            使用均匀采样策略提取最多60帧，并分批处理(每批15帧)进行分析，确保覆盖整个视频。
+            使用均匀采样策略提取最多100帧，并分批处理(每批15帧)进行分析，确保覆盖整个视频。
             重点识别汽车相关场景、场景变化和关键视觉元素。
             
             在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用这个文件路径。{special_req_text}""",
@@ -122,16 +167,29 @@ class VideoInfoExtractor:
             使用LoadFramesAnalysisFromFile工具从文件 {frames_analysis_file} 加载帧分析结果，
             然后分析这些帧之间的关系，提取动态特征。
             
-            语音内容摘要:
-            {transcription.get('text', '无语音内容')[:1000]}...
+            语音内容及时间戳信息:
+            {formatted_transcription}
             
-            重点关注:
-            1. 运镜技巧：识别推、拉、摇、移等镜头运动
-            2. 色调变化：分析色彩搭配和色调随时间的变化
-            3. 节奏感：评估剪辑节奏和视觉流动性
-            4. 情绪表达：分析视觉元素如何传达情绪
-            5. 汽车展示特点：分析汽车的动态展示方式和速度感表现
-            6. 视听结合：分析视觉内容与语音内容的配合方式
+            首先，请判断素材类型：
+            1. 如果是画面丰富的素材（如汽车展示、风景、产品展示等），请重点关注:
+               - 运镜技巧：识别推、拉、摇、移等镜头运动
+               - 色调变化：分析色彩搭配和色调随时间的变化
+               - 节奏感：评估剪辑节奏和视觉流动性
+               - 情绪表达：分析视觉元素如何传达情绪
+               - 汽车展示特点：分析汽车的动态展示方式和速度感表现
+            
+            2. 如果是人物采访类素材，请重点关注:
+               - 语义分段：根据语音内容的语义完整性进行分段
+               - 情感变化：分析说话人的情绪变化
+               - 关键信息：提取每个语义段落的核心信息
+               - 视听结合：分析背景画面与语音内容的配合
+               - 建议切分点：在语义自然结束的地方建议切分点
+            
+            对于任何类型的素材，都需要:
+            - 提供每个段落/镜头的精确开始和结束时间
+            - 确保每个段落不少于2秒
+            - 如果两个片段属于同一个场景或语义单元，需要合并为一段
+            - 严格参照帧分析和语音时间戳提供分割点信息
             
             提供专业的电影摄影分析，使用行业术语。{special_req_text}""",
             expected_output="包含运镜、色调、节奏等动态特征分析的JSON对象，并包含视听结合分析。",

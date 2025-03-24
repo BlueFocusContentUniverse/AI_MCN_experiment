@@ -29,7 +29,7 @@ class VideoEditingService:
             raise RuntimeError("Error: FFmpeg is not installed or not in PATH. Please install FFmpeg.")
     
     def cut_video_segment(self, video_path: str, start_time: float, end_time: float, 
-                          output_file: Optional[str] = None) -> str:
+                          output_file: Optional[str] = None, keep_audio: bool = True) -> str:
         """
         剪切视频片段
         
@@ -38,6 +38,7 @@ class VideoEditingService:
         start_time: 开始时间（秒）
         end_time: 结束时间（秒）
         output_file: 输出文件路径，如果为None则自动生成
+        keep_audio: 是否保留音频
         
         返回:
         剪切后的视频文件路径
@@ -71,14 +72,25 @@ class VideoEditingService:
                 "-c:v", "libx264",  # 视频编码
                 "-preset", "medium",  # 编码预设
                 "-crf", "23",  # 质量
-                "-c:a", "aac",  # 音频编码
-                "-b:a", "128k",  # 音频比特率
+            ]
+            
+            if keep_audio:
+                # 保留音频
+                cmd.extend([
+                    "-c:a", "aac",  # 音频编码
+                    "-b:a", "128k",  # 音频比特率
+                ])
+            else:
+                # 不保留音频
+                cmd.append("-an")  # 移除音频
+            
+            cmd.extend([
                 "-avoid_negative_ts", "1",  # 避免负时间戳
                 "-async", "1",  # 音频同步
                 "-vsync", "1",  # 视频同步
                 "-movflags", "+faststart",  # 优化MP4文件结构
                 temp_output  # 临时输出文件
-            ]
+            ])
             
             print(f"执行FFmpeg命令: {' '.join(cmd)}")
             
@@ -306,13 +318,23 @@ class VideoEditingService:
         
         # 创建临时目录
         with tempfile.TemporaryDirectory() as temp_dir:
+            # 首先将所有视频复制到临时目录
+            temp_video_files = []
+            for i, video_path in enumerate(video_files):
+                if not os.path.exists(video_path):
+                    raise FileNotFoundError(f"Video file not found: {video_path}")
+                
+                # 复制到临时目录并使用简单文件名
+                temp_video_name = f"temp_video_{i}.mp4"
+                temp_video_path = os.path.join(temp_dir, temp_video_name)
+                shutil.copy2(video_path, temp_video_path)
+                temp_video_files.append(temp_video_name)
+            
             # 创建片段列表文件
             segments_file = os.path.join(temp_dir, "segments.txt")
             with open(segments_file, "w") as f:
-                for video_path in video_files:
-                    if not os.path.exists(video_path):
-                        raise FileNotFoundError(f"Video file not found: {video_path}")
-                    f.write(f"file '{video_path}'\n")
+                for video_name in temp_video_files:
+                    f.write(f"file '{video_name}'\n")
             
             # 构建ffmpeg命令
             cmd = [
@@ -327,6 +349,10 @@ class VideoEditingService:
             
             print(f"执行FFmpeg命令 (连接视频): {' '.join(cmd)}")
             
+            # 切换到临时目录执行命令
+            current_dir = os.getcwd()
+            os.chdir(temp_dir)
+            
             # 执行命令
             process = subprocess.run(
                 cmd,
@@ -334,6 +360,9 @@ class VideoEditingService:
                 stderr=subprocess.PIPE,
                 text=True
             )
+            
+            # 切回原目录
+            os.chdir(current_dir)
             
             if process.returncode != 0:
                 raise RuntimeError(f"Error concatenating videos: {process.stderr}")
@@ -353,6 +382,7 @@ class VideoEditingService:
         返回:
         最终视频文件路径
         """
+        
         if "segments" not in editing_plan:
             raise ValueError("Missing segments in editing plan")
         
@@ -407,7 +437,8 @@ class VideoEditingService:
                             part["video_path"],
                             part["start_time"],
                             part["end_time"],
-                            part_output
+                            part_output,
+                            part.get("keep_original_audio", True)
                         )
                         
                         # 标准化视频片段为竖屏1080p
@@ -439,7 +470,9 @@ class VideoEditingService:
                 parts_file = os.path.join(segment_dir, "parts.txt")
                 with open(parts_file, "w") as f:
                     for part in processed_parts:
-                        f.write(f"file '{part['file_path']}'\n")
+                        # 使用相对路径，因为ffmpeg会在segment_dir目录下执行
+                        part_filename = os.path.basename(part['file_path'])
+                        f.write(f"file '{part_filename}'\n")
                 
                 # 合并分段的所有部分
                 concat_cmd = [
@@ -454,6 +487,10 @@ class VideoEditingService:
                 
                 print(f"执行FFmpeg命令 (简单连接分段 {segment_id} 的部分): {' '.join(concat_cmd)}")
                 
+                # 切换到segment_dir执行命令
+                current_dir = os.getcwd()
+                os.chdir(segment_dir)
+                
                 # 执行命令
                 process = subprocess.run(
                     concat_cmd,
@@ -461,6 +498,9 @@ class VideoEditingService:
                     stderr=subprocess.PIPE,
                     text=True
                 )
+                
+                # 切回原目录
+                os.chdir(current_dir)
                 
                 if process.returncode != 0:
                     print(f"警告: 简单连接分段 {segment_id} 的部分时出错: {process.stderr}")
@@ -511,7 +551,16 @@ class VideoEditingService:
             final_segments_file = os.path.join(temp_dir, "final_segments.txt")
             with open(final_segments_file, "w") as f:
                 for segment in segments_with_audio:
-                    f.write(f"file '{segment['file_path']}'\n")
+                    # 使用相对路径，避免路径重复
+                    segment_filename = os.path.basename(segment['file_path'])
+                    f.write(f"file '{segment_filename}'\n")
+                    
+                    # 同时在临时目录中复制或创建符号链接
+                    if os.path.dirname(segment['file_path']) != temp_dir:
+                        target_path = os.path.join(temp_dir, segment_filename)
+                        # 如果文件不在temp_dir中，则复制或创建符号链接
+                        if not os.path.exists(target_path):
+                            shutil.copy2(segment['file_path'], target_path)
             
             # 合并所有最终分段
             concat_cmd = [
@@ -521,10 +570,17 @@ class VideoEditingService:
                 "-safe", "0",  # 允许不安全的文件路径
                 "-i", final_segments_file,  # 输入片段列表
                 "-c", "copy",  # 复制编码（不重新编码）
-                output_file  # 输出文件
+                os.path.abspath(output_file)  # 使用绝对输出文件路径
             ]
             
+            # 确保输出文件的父目录存在
+            os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
+            
             print(f"执行FFmpeg命令 (合并所有最终分段): {' '.join(concat_cmd)}")
+            
+            # 切换到临时目录执行命令
+            current_dir = os.getcwd()
+            os.chdir(temp_dir)
             
             # 执行命令
             process = subprocess.run(
@@ -534,7 +590,108 @@ class VideoEditingService:
                 text=True
             )
             
+            # 切回原目录
+            os.chdir(current_dir)
+            
             if process.returncode != 0:
                 raise RuntimeError(f"Error merging final video segments: {process.stderr}")
+            
+            return output_file
+    
+    def create_video_from_segments_with_audio_control(self, segments: List[Dict[str, Any]], 
+                                                    output_file: str, 
+                                                    add_transitions: bool = True) -> str:
+        """
+        从多个视频片段创建视频，可以控制是否保留原音频
+        
+        参数:
+        segments: 视频片段列表，每个片段包含视频路径、开始时间、结束时间和是否保留原音频
+        output_file: 输出文件路径
+        add_transitions: 是否添加转场效果
+        
+        返回:
+        最终视频文件路径
+        """
+        if not segments:
+            raise ValueError("No segments provided")
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        
+        # 创建临时目录
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 处理每个片段
+            processed_segments = []
+            
+            for i, segment in enumerate(segments):
+                video_path = segment["video_path"]
+                start_time = segment["start_time"]
+                end_time = segment["end_time"]
+                keep_original_audio = segment.get("keep_original_audio", False)
+                
+                # 剪切片段
+                segment_output = os.path.join(temp_dir, f"segment_{i}.mp4")
+                
+                # 根据是否保留原音频选择不同的剪切命令
+                if keep_original_audio:
+                    # 保留原音频
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-ss", str(start_time),
+                        "-i", video_path,
+                        "-t", str(end_time - start_time),
+                        "-c:v", "libx264",
+                        "-c:a", "aac",
+                        "-strict", "experimental",
+                        segment_output
+                    ]
+                else:
+                    # 不保留原音频（静音）
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-ss", str(start_time),
+                        "-i", video_path,
+                        "-t", str(end_time - start_time),
+                        "-c:v", "libx264",
+                        "-an",  # 移除音频
+                        segment_output
+                    ]
+                
+                subprocess.run(cmd, check=True)
+                
+                processed_segments.append({
+                    "file_path": segment_output,
+                    "keep_original_audio": keep_original_audio
+                })
+            
+            # 创建片段列表文件
+            segments_file = os.path.join(temp_dir, "segments.txt")
+            with open(segments_file, "w") as f:
+                for segment in processed_segments:
+                    # 使用文件名而不是完整路径，避免路径重复
+                    segment_filename = os.path.basename(segment['file_path'])
+                    f.write(f"file '{segment_filename}'\n")
+            
+            # 合并所有片段
+            concat_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", segments_file,
+                "-c", "copy",
+                output_file
+            ]
+            
+            # 切换到临时目录执行命令
+            current_dir = os.getcwd()
+            os.chdir(temp_dir)
+            
+            subprocess.run(concat_cmd, check=True)
+            
+            # 切回原目录
+            os.chdir(current_dir)
             
             return output_file 

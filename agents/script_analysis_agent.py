@@ -58,7 +58,7 @@ class ScriptAnalysisAgent:
             allow_delegation=False,
             tools=[script_analysis_tool],
             llm=LLM(
-                model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",  # Claude模型名称
+                model="gemini-1.5-pro",  # Claude模型名称
                 api_key=os.environ.get('OPENAI_API_KEY'),  # 代理API Key
                 base_url=os.environ.get('OPENAI_BASE_URL'),  # 代理Base URL
                 temperature=0.1,

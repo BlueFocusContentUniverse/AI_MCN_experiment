@@ -288,4 +288,88 @@ class MongoDBService:
     def close(self):
         """关闭MongoDB连接"""
         if self.client:
-            self.client.close() 
+            self.client.close()
+    
+    def text_similarity_search(self, query_text: str, pre_filter: Dict[str, Any] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        使用文本相似度搜索视频片段
+        
+        参数:
+        query_text: 查询文本
+        pre_filter: 预过滤条件
+        limit: 最大返回数量
+        
+        返回:
+        相似度最高的视频片段列表，每个片段包含similarity_score字段
+        """
+        try:
+            # 构建查询条件
+            query = {}
+            if pre_filter:
+                query.update(pre_filter)
+            
+            # 确保只查询有whisper转写文本的文档
+            query["transcription"] = {"$exists": True}
+            
+            # 查询所有符合条件的视频
+            videos = list(self.video_info.find(query))
+            
+            # 如果没有找到视频，返回空列表
+            if not videos:
+                logger.warning(f"未找到符合条件的视频: {pre_filter}")
+                return []
+            
+            # 计算文本相似度并找到最匹配的片段
+            results_with_scores = []
+            for video in videos:
+                if "transcription" in video and video["transcription"]:
+                    # 遍历视频中的所有whisper片段
+                    for segment in video["transcription"]:
+                        if "text" in segment:
+                            # 计算文本相似度（简单使用字符串包含关系和长度比例）
+                            segment_text = segment["text"]
+                            
+                            # 计算相似度分数
+                            # 1. 检查是否包含查询文本（完全匹配）
+                            if query_text.lower() in segment_text.lower():
+                                similarity = 0.9 + 0.1 * (len(query_text) / len(segment_text))
+                            # 2. 检查查询文本中的关键词匹配
+                            else:
+                                # 分词并计算关键词匹配率
+                                query_words = set(query_text.lower().split())
+                                segment_words = set(segment_text.lower().split())
+                                common_words = query_words.intersection(segment_words)
+                                
+                                if common_words:
+                                    similarity = len(common_words) / len(query_words)
+                                else:
+                                    similarity = 0
+                            
+                            # 如果相似度大于阈值，添加到结果
+                            if similarity > 0.3:  # 可调整的阈值
+                                result = {
+                                    "video_path": video.get("video_path", ""),
+                                    "segment": segment,
+                                    "similarity_score": similarity
+                                }
+                                results_with_scores.append(result)
+            
+            # 按相似度降序排序
+            results_with_scores.sort(key=lambda x: x["similarity_score"], reverse=True)
+            
+            # 限制返回数量
+            return results_with_scores[:limit]
+        
+        except Exception as e:
+            logger.error(f"文本相似度搜索时出错: {str(e)}")
+            return []
+    
+    def _ensure_absolute_path(self, path: str) -> str:
+        """确保路径是绝对路径"""
+        if not path:
+            return path
+        if os.path.isabs(path):
+            return path
+        # 假设有一个基础目录
+        base_dir = os.environ.get('VIDEO_BASE_DIR', '/path/to/videos')
+        return os.path.join(base_dir, path) 

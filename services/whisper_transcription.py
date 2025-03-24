@@ -110,81 +110,83 @@ class WhisperTranscriptionService:
         
         try:
             # 尝试直接使用视频文件
-            print("尝试直接转录视频...")
-            try:
-                with open(video_path, "rb") as video_file:
-                    response = self.client.audio.transcriptions.create(
-                        model="whisper",
-                        file=video_file,
-                        language=language,
-                        response_format="verbose_json"
-                    )
+            # print("尝试直接转录视频...")
+            # try:
+            # #     with open(video_path, "rb") as video_file:
+            #         response = self.client.audio.transcriptions.create(
+            #             model="whisper",
+            #             prompt="请解析以下简体中文内容。解析出来的segment注意要是一个完整的语义，不要断开。",
+            #             file=video_file,
+            #             language=language,
+            #             response_format="verbose_json"
+            #         )
                     
-                    # 提取结果
-                    transcription = {
-                        "text": response.text,
-                        "segments": []
-                    }
+            #         # 提取结果
+            #         transcription = {
+            #             "text": response.text,
+            #             "segments": []
+            #         }
                     
-                    # 提取分段信息
-                    for segment in response.segments:
-                        transcription["segments"].append({
-                            "id": segment.id,
-                            "start": segment.start,
-                            "end": segment.end,
-                            "text": segment.text
-                        })
+            #         # 提取分段信息
+            #         for segment in response.segments:
+            #             transcription["segments"].append({
+            #                 "id": segment.id,
+            #                 "start": segment.start,
+            #                 "end": segment.end,
+            #                 "text": segment.text
+            #             })
                     
-                    print(f"视频直接转录完成，共 {len(transcription['segments'])} 个分段")
-                    return transcription
+            #         print(f"视频直接转录完成，共 {len(transcription['segments'])} 个分段")
+            #         return transcription
                     
-            except Exception as direct_error:
-                print(f"直接转录视频失败: {str(direct_error)}，尝试提取音频...")
+            # except Exception as direct_error:
+            #     print(f"直接转录视频失败: {str(direct_error)}，尝试提取音频...")
                 
-                # 如果直接转录失败，尝试提取音频
-                audio_path = self.extract_audio_from_video(video_path)
-                
-                # 如果没有音频，返回空结果
-                if audio_path is None:
-                    print("视频没有音频，返回空转录结果")
-                    return {
-                        "text": "",
-                        "segments": [],
-                        "no_audio": True
-                    }
-                
-                # 打开音频文件
-                with open(audio_path, "rb") as audio_file:
-                    # 转录视频
-                    print("开始转录提取的音频...")
-                    response = self.client.audio.transcriptions.create(
-                        model="whisper",
-                        file=audio_file,
-                        language=language,
-                        response_format="verbose_json"
-                    )
-                
-                # 清理临时音频文件
-                if os.path.exists(audio_path):
-                    os.unlink(audio_path)
-                
-                # 提取结果
-                transcription = {
-                    "text": response.text,
-                    "segments": []
+            # 如果直接转录失败，尝试提取音频
+            audio_path = self.extract_audio_from_video(video_path)
+            
+            # 如果没有音频，返回空结果
+            if audio_path is None:
+                print("视频没有音频，返回空转录结果")
+                return {
+                    "text": "",
+                    "segments": [],
+                    "no_audio": True
                 }
-                
-                # 提取分段信息
-                for segment in response.segments:
-                    transcription["segments"].append({
-                        "id": segment.id,
-                        "start": segment.start,
-                        "end": segment.end,
-                        "text": segment.text
-                    })
-                
-                print(f"音频转录完成，共 {len(transcription['segments'])} 个分段")
-                return transcription
+            
+            # 打开音频文件
+            with open(audio_path, "rb") as audio_file:
+                # 转录视频
+                print("开始转录提取的音频...")
+                response = self.client.audio.transcriptions.create(
+                    model="whisper",
+                    prompt="请解析以下简体中文内容。",
+                    file=audio_file,
+                    language=language,
+                    response_format="verbose_json"
+                )
+            
+            # 清理临时音频文件
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+            
+            # 提取结果
+            transcription = {
+                "text": response.text,
+                "segments": response.segments
+            }
+            
+            # # 提取分段信息
+            # for segment in response.segments:
+            #     transcription["segments"].append({
+            #         "id": segment.id,
+            #         "start": segment.start,
+            #         "end": segment.end,
+            #         "text": segment.text
+            #     })
+            
+            print(f"音频转录完成，共 {len(transcription['segments'])} 个分段")
+            return transcription
                 
         except Exception as e:
             raise Exception(f"Error transcribing video: {str(e)}") 
