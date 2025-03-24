@@ -43,6 +43,7 @@ debug_output/
 *.jpg
 *.png
 *.json
+*.txt
 !requirements.json
 
 # MongoDB
@@ -57,3 +58,9 @@ temp/
 tmp/
 *.tmp
 *.temp 
+
+# Test output
+test_output/
+list/
+slice_for_video/
+
