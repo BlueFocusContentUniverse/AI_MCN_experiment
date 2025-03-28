@@ -151,7 +151,7 @@ def handle_file_upload():
                 st.success(f"任务创建成功！任务ID: {task_id}")
                 
                 # 显示链接到任务页面
-                st.markdown(f"[查看任务状态](./_tasks?task_id={task_id})")
+                st.markdown(f"[查看任务状态](./tasks?task_id={task_id})")
                 
             except Exception as e:
                 st.error(f"创建任务失败: {str(e)}")

@@ -12,6 +12,7 @@ from streamlit_app.services.mongo_service import TaskManagerService
 from streamlit_app.utils.video_processor import VideoProcessorService
 from streamlit_app.components.task_card import task_card, compact_task_card
 from streamlit_app.components.status_badge import status_badge, inline_status_badge
+from streamlit_app.components.processing_status import processing_status, worker_status_table, task_queue_preview
 
 # 设置页面配置
 st.set_page_config(
@@ -20,10 +21,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# 初始化服务
-task_manager = TaskManagerService()
-video_processor = VideoProcessorService()
 
 # 添加自定义样式
 st.markdown("""
@@ -41,6 +38,10 @@ st.markdown("""
     }
     </style>
     """, unsafe_allow_html=True)
+
+# 初始化服务
+task_manager = TaskManagerService()
+video_processor = VideoProcessorService()
 
 # 自定义排序函数，将ISO格式字符串转换为datetime进行比较
 def get_created_time(task):
@@ -194,7 +195,7 @@ def show_completed_tasks():
             st.info("当前没有已完成的任务")
             return
         
-        # 按创建时间排序
+        # 使用相同的排序函数
         all_completed_tasks.sort(key=get_created_time, reverse=True)
         
         # 显示任务表头
@@ -220,16 +221,11 @@ def show_completed_tasks():
         # 显示每个任务
         for task in all_completed_tasks:
             compact_task_card(task)
-            
-            col1, col2 = st.columns([5, 1])
-            
-            with col2:
-                if st.button("查看详情", key=f"view_{task['_id']}"):
-                    st.session_state.selected_task_id = task["_id"]
-                    st.rerun()
         
     except Exception as e:
-        st.error(f"显示已完成的任务时出错: {str(e)}")
+        st.error(f"显示已完成任务时出错: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 def show_failed_tasks():
     """显示失败的任务"""
@@ -285,12 +281,7 @@ def show_failed_tasks():
 
 def render_task_tabs():
     """渲染任务选项卡"""
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "处理中",
-        "等待中",
-        "已完成",
-        "失败/取消"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["处理中", "等待中", "已完成", "失败/取消"])
     
     with tab1:
         show_active_tasks()
@@ -305,47 +296,60 @@ def render_task_tabs():
         show_failed_tasks()
 
 def main():
-    # 页面标题
+    # 显示页面标题
     st.title("🔍 任务监控")
     
     # 获取URL参数
-    query_params = st.query_params
+    query_params = st.experimental_get_query_params()
+    task_id = query_params.get("task_id", [""])[0]
     
-    # 检查是否有任务ID参数
-    if "task_id" in query_params:
-        task_id = query_params["task_id"]
-        
-        # 显示任务详情
-        task_detail(task_id)
+    # 存储选中的任务ID
+    if "selected_task_id" not in st.session_state:
+        st.session_state.selected_task_id = task_id
+    
+    # 如果URL中有任务ID参数
+    if task_id:
+        # 如果不是当前选中的任务，更新选中的任务ID
+        if st.session_state.selected_task_id != task_id:
+            st.session_state.selected_task_id = task_id
+    
+    # 显示处理状态
+    processing_status(video_processor)
+    
+    # 显示工作线程状态表格
+    with st.expander("查看工作线程状态"):
+        worker_status_table(video_processor)
+    
+    # 显示任务队列预览
+    with st.expander("查看任务队列"):
+        task_queue_preview(video_processor)
+    
+    # 如果有选中的任务，显示任务详情
+    if st.session_state.selected_task_id:
+        st.markdown("---")
+        st.subheader("任务详情")
+        task_detail(st.session_state.selected_task_id)
         
         # 添加返回按钮
         if st.button("返回任务列表"):
-            query_params.clear()
+            st.session_state.selected_task_id = ""
             st.rerun()
-            
-    # 检查会话状态
-    elif hasattr(st.session_state, "selected_task_id"):
-        task_id = st.session_state.selected_task_id
-        
-        # 显示任务详情
-        task_detail(task_id)
-        
-        # 添加返回按钮
-        if st.button("返回任务列表"):
-            st.session_state.pop("selected_task_id")
-            st.rerun()
-            
     else:
-        # 显示任务列表
+        # 否则，显示任务列表
+        st.markdown("---")
+        st.subheader("任务列表")
         render_task_tabs()
-        
-        # 添加自动刷新功能
-        auto_refresh = st.sidebar.checkbox("自动刷新", value=True)
-        refresh_interval = st.sidebar.slider("刷新间隔 (秒)", 1, 60, REFRESH_INTERVAL)
-        
-        if auto_refresh:
-            time.sleep(refresh_interval)
-            st.rerun()
+    
+    # 自动刷新页面
+    # 注意：过于频繁的刷新可能会导致页面卡顿，谨慎使用
+    if st.session_state.get("auto_refresh", False):
+        st.markdown(f"""
+        <script>
+            setTimeout(function() {{
+                window.location.reload();
+            }}, {REFRESH_INTERVAL * 1000});
+        </script>
+        """, unsafe_allow_html=True)
 
 # 运行主函数
 if __name__ == "__main__":
