@@ -17,6 +17,7 @@ from services.video_editing_service import VideoEditingService
 from tools.subtitle_tool import SubtitleTool
 from crewai import Task, Crew, Process
 from crewai.llm import LLM
+from services.material_matching_service import MaterialMatchingService
 
 class VideoProductionService:
     """视频生产服务，整合口播稿、音频生成和视频剪辑"""
@@ -61,6 +62,8 @@ class VideoProductionService:
         #     custom_llm_provider="openai",
         #     request_timeout=180  # 增加超时时间到180秒
         # )
+        
+        self.material_matcher = MaterialMatchingService()
     
     def _safe_parse_json(self, result: Any, method_name: str = "未知方法") -> Dict[str, Any]:
         """
@@ -664,6 +667,24 @@ class VideoProductionService:
             traceback.print_exc()  # 打印详细的错误堆栈
             # 如果出错，返回原始视频
             return video_file
+
+    def match_script_to_materials(self, script: str) -> dict:
+        """
+        将脚本匹配到可用的视频素材，使用基于向量搜索的智能匹配
+        
+        参数:
+        script: 脚本文本
+        
+        返回:
+        匹配结果，包含分镜表和每个场景的匹配片段
+        """
+        try:
+            # 使用智能匹配服务执行匹配
+            match_results = self.material_matcher.match_script_to_video(script)
+            return match_results
+        except Exception as e:
+            logger.error(f"匹配脚本到素材时出错: {str(e)}")
+            raise
 
 
 class FishSpeechRecognizer:

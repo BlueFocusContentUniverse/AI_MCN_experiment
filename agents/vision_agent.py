@@ -34,7 +34,7 @@ class VisionAgent:
                 model="gemini-1.5-pro",
                 api_key=os.environ.get("OPENAI_API_KEY"),
                 base_url=os.environ.get("OPENAI_BASE_URL"),
-                temperature=0.7,
+                temperature=0.1,
                 custom_llm_provider="openai"
             )
         )

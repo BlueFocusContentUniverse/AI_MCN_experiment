@@ -11,6 +11,7 @@ from crewai import Task, Crew, Process
 import datetime
 import logging
 from services.embedding_service import EmbeddingService
+from bson.objectid import ObjectId
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -90,12 +91,13 @@ class VideoInfoExtractor:
         
         return formatted_text
     
-    def extract_video_info(self, video_path: str) -> Dict[str, Any]:
+    def extract_video_info(self, video_path: str, custom_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         提取视频信息，包括语音、视觉和动态信息
         
         参数:
         video_path: 视频文件路径
+        custom_metadata: 用户自定义元数据，如品牌、型号等
         
         返回:
         完整的视频信息
@@ -109,6 +111,9 @@ class VideoInfoExtractor:
                 existing_info = self.mongodb_service.find_video_by_path(video_path)
                 if existing_info:
                     logger.info(f"找到现有分析结果: {video_path}")
+                    # 如果提供了自定义元数据，更新现有结果
+                    if custom_metadata:
+                        self._update_video_metadata(existing_info["_id"], custom_metadata)
                     return existing_info
             except Exception as e:
                 logger.error(f"查询MongoDB时出错: {str(e)}")
@@ -131,7 +136,7 @@ class VideoInfoExtractor:
             重要提示：你必须使用BatchProcessingFrames工具来处理视频，该工具会自动执行分批处理，确保所有帧都被分析。
             该工具会将完整的分析结果保存到文件中，并返回文件路径。
             
-            使用均匀采样策略提取最多100帧，并分批处理(每批15帧)进行分析，确保覆盖整个视频。
+            使用均匀采样策略提取最多60帧，并分批处理(每批15帧)进行分析，确保覆盖整个视频。
             重点识别汽车相关场景、场景变化和关键视觉元素。
             
             在你的回复中，请确保包含结果文件的路径，这样下一个Agent就能使用这个文件路径。{special_req_text}""",
@@ -149,6 +154,7 @@ class VideoInfoExtractor:
         
         # 执行视觉分析
         vision_result = vision_crew.kickoff(inputs={"video_path": video_path})
+        
         
         # 解析视觉分析结果，获取帧分析文件路径
         frames_analysis_file = self._extract_file_path_from_result(vision_result)
@@ -170,29 +176,148 @@ class VideoInfoExtractor:
             语音内容及时间戳信息:
             {formatted_transcription}
             
-            首先，请判断素材类型：
-            1. 如果是画面丰富的素材（如汽车展示、风景、产品展示等），请重点关注:
-               - 运镜技巧：识别推、拉、摇、移等镜头运动
-               - 色调变化：分析色彩搭配和色调随时间的变化
-               - 节奏感：评估剪辑节奏和视觉流动性
-               - 情绪表达：分析视觉元素如何传达情绪
-               - 汽车展示特点：分析汽车的动态展示方式和速度感表现
-            
-            2. 如果是人物采访类素材，请重点关注:
-               - 语义分段：根据语音内容的语义完整性进行分段
-               - 情感变化：分析说话人的情绪变化
-               - 关键信息：提取每个语义段落的核心信息
-               - 视听结合：分析背景画面与语音内容的配合
-               - 建议切分点：在语义自然结束的地方建议切分点
-            
-            对于任何类型的素材，都需要:
-            - 提供每个段落/镜头的精确开始和结束时间
-            - 确保每个段落不少于2秒
-            - 如果两个片段属于同一个场景或语义单元，需要合并为一段
-            - 严格参照帧分析和语音时间戳提供分割点信息
+            首先，你需要判断素材类型，然后进行专业分析并输出标准化 JSON 格式结果：
+
+1. 如果是画面丰富的素材（如汽车展示、风景、产品展示等）：
+   特别是对于汽车相关视频，你能够精准描述车辆展示的动态效果、速度感的表现以及视觉冲击力。
+   请在分析中对于运镜、分镜、色彩、节奏等进行总结，并标记每个镜头的详细信息。
+   由于是汽车相关的视频，你的分析需要从汽车的角度出发，重点分析汽车相关的场景和内容，
+   也需要包含汽车的外观、内饰、动力、性能等。（如果有的话）
+
+2. 如果是人物采访类素材：
+   你需要重点关注语音信息和语义完整性，按照语音内容进行切分。
+   对于采访内容，应保持语义的完整性，确保每个切分点都是在语义自然结束的地方。
+   切分时应优先考虑语音内容的连贯性，而非画面变化。
+
+通用要求：
+- 需要包含一定细节，同时需要严格参照帧的时间戳
+- 每段视频素材不能低于 2秒，否则会被剪辑师删除
+- 如果两个片段属于同一个场景或同一个语义单元，那么需要合并成一段视频，不要切割
+- 请严格参照解析结果中的时间戳给出分割点信息，因为分割点不准确会直接导致最后的效果大打折扣
+
+【新增分析维度】
+你需要基于影视镜头语言理论和叙事学对素材进行多维度的专业打标：
+
+1. 人称视角：
+   - POV（第一人称视角）：镜头模拟人眼视觉，产生强烈沉浸感
+   - 第二人称视角：镜头直面主体，如同对话者
+   - 第三人称视角：客观记录视角（可细分为有限第三人称和全知第三人称）
+
+2. 空间维度：
+   a. 镜头尺寸：远景/全景、中景、近景/特写、极近景/微距
+   b. 镜头角度：高角度/俯视、平角度、低角度/仰视、倾斜角度
+   c. 镜头运动：静态镜头、推拉镜头、摇移镜头、追踪镜头、空中镜头
+
+3. 叙事结构：
+   a. 故事驱动型：情感叙事、问题解决叙事、英雄旅程式
+   b. 信息传达型：专家证言式、数据可视化、问答解疑式
+   c. 感官刺激型
+
+4. 色彩风格
+5. 剪辑节奏
+6. 环境信息
+7. 具体内容
+8. 传播策略：社交媒体、官方展示、线下场景
+
+【视频内容分析】
+1. 整体内容概述：
+   - 视频的主要内容和目的
+   - 核心主题和关键信息
+   - 目标受众和传播意图
+
+2. 关键事件时间线：
+   - 重要时刻和转折点
+   - 关键场景和事件
+   - 内容节奏变化点
+
+3. 重点强调内容：
+   - 重复出现的元素或主题
+   - 特别强调的画面或信息
+   - 情感渲染点
+
+4. 主题提炼：
+   - 核心信息
+   - 情感基调
+   - 价值主张
+
+【音频信息分析】
+对于人物访谈类视频，进行基于音频的内容分类与分析：
+- 语音情感特征
+- 对话节奏与关键词提取
+- 背景音乐/音效分析
+- 声场空间特性
+
+【输出格式】
+所有分析必须以标准 JSON 格式输出
             
             提供专业的电影摄影分析，使用行业术语。{special_req_text}""",
-            expected_output="包含运镜、色调、节奏等动态特征分析的JSON对象，并包含视听结合分析。",
+            expected_output="""包含运镜、色调、节奏等动态特征分析的JSON字符串，并包含视听结合分析。
+            基本结构如下：
+            {
+  "metadata": {
+    "video_type": "画面丰富型|人物访谈型",
+    "analysis_version": "2.5"
+  },
+  "content_overview": {
+    "main_content": "",
+    "core_theme": "",
+    "target_audience": "",
+    "communication_purpose": ""
+  },
+  "key_events": [
+    {
+      "timestamp": 0.0,
+      "event_description": "",
+      "importance_level": "high|medium|low",
+      "impact_on_narrative": ""
+    }
+  ],
+  "emphasis_analysis": {
+    "repeated_elements": [],
+    "highlighted_content": [],
+    "emotional_peaks": []
+  },
+  "theme_analysis": {
+    "core_message": "",
+    "emotional_tone": "",
+    "value_proposition": ""
+  },
+  "segments": [
+    {
+      "start_time": 0.0,
+      "end_time": 0.0,
+      "shot_type": "",
+      "shot_description": "",
+      "visual_elements": {
+        "composition": "",
+        "color_scheme": "",
+        "rhythm": "",
+        "emotion": ""
+      },
+      "cinematic_language": {
+        "perspective": "",
+        "shot_size": "",
+        "angle": "",
+        "movement": ""
+      },
+      "narrative_structure": "",
+      "audio_analysis": {
+        "speech_content": "",
+        "emotion": "",
+        "keywords": []
+      },
+      "subject_focus": {}
+    }
+  ],
+  "overall_analysis": {
+    "visual_style": "",
+    "narrative_approach": "",
+    "color_palette": "",
+    "editing_rhythm": "",
+    "communication_strategy": ""
+  }
+}
+注意，输出必须是一个标准的JSON字符串，可以直接使用JSON.parse来解析成json格式。使用json代码块包裹,每段segment的时长必须超过2秒""",
             agent=self.cinematography_agent
         )
         
@@ -208,6 +333,31 @@ class VideoInfoExtractor:
         cinematography_result = cinematography_crew.kickoff(
             inputs={"frames_analysis_file": frames_analysis_file}
         )
+        output_text = str(cinematography_result).strip()
+        
+        # 尝试匹配JSON代码块
+        json_match = re.search(r'```json\n(.*?)\n```', output_text, re.DOTALL)
+        if json_match:
+            # 如果找到JSON代码块，提取并解析
+            json_str = json_match.group(1).strip()
+            try:
+                parsed_json = json.loads(json_str)
+                print("从JSON代码块解析的数据：")
+                print(parsed_json)
+            except json.JSONDecodeError as e:
+                print(f"JSON解析错误: {str(e)}")
+                print("原始JSON字符串：")
+                print(json_str)
+        else:
+            # 如果没有找到JSON代码块，尝试直接解析整个文本
+            try:
+                parsed_json = json.loads(output_text)
+                print("直接解析的数据：")
+                print(parsed_json)
+            except json.JSONDecodeError as e:
+                print(f"JSON解析错误: {str(e)}")
+                print("原始文本：")
+                print(output_text)
         
         # 4. 整合所有信息
         logger.info("整合所有信息...")
@@ -216,7 +366,8 @@ class VideoInfoExtractor:
             transcription=transcription,
             vision_result=vision_result,
             cinematography_result=cinematography_result,
-            frames_analysis_file=frames_analysis_file
+            frames_analysis_file=frames_analysis_file,
+            custom_metadata=custom_metadata
         )
         
         # 5. 保存到MongoDB
@@ -241,14 +392,17 @@ class VideoInfoExtractor:
         return video_info
     
     def _ensure_required_fields(self, video_info: Dict[str, Any]) -> None:
-        """确保video_info包含所有必要的字段"""
+        """确保video_info包含所有必要的字段，兼容两表模型"""
+        # 基本字段检查
         required_fields = {
             "video_path": str,
             "analysis_time": str,
             "brand": str,
             "transcription": dict,
             "vision_analysis": dict,
-            "cinematography_analysis": dict
+            "cinematography_analysis": dict,
+            "content_tags": list,
+            "multimodal_info": dict
         }
         
         for field, field_type in required_fields.items():
@@ -268,6 +422,70 @@ class VideoInfoExtractor:
                     video_info[field] = []
                 else:
                     video_info[field] = str(video_info[field])
+        
+        # 确保电影摄影分析包含必要的字段，以兼容两表模型
+        cinema_required_fields = {
+            "metadata": dict,
+            "content_overview": dict,
+            "key_events": list,
+            "emphasis_analysis": dict, 
+            "theme_analysis": dict,
+            "segments": list,
+            "overall_analysis": dict
+        }
+        
+        cinematography = video_info.get("cinematography_analysis", {})
+        for field, field_type in cinema_required_fields.items():
+            if field not in cinematography:
+                logger.warning(f"cinematography_analysis缺少必要字段: {field}，添加默认值")
+                if field_type == dict:
+                    cinematography[field] = {}
+                elif field_type == list:
+                    cinematography[field] = []
+                else:
+                    cinematography[field] = "未知"
+            elif not isinstance(cinematography[field], field_type):
+                logger.warning(f"cinematography_analysis字段类型不匹配: {field}，期望{field_type}，实际{type(cinematography[field])}，转换为默认值")
+                if field_type == dict:
+                    cinematography[field] = {}
+                elif field_type == list:
+                    cinematography[field] = []
+                else:
+                    cinematography[field] = str(cinematography[field])
+        
+        # 确保每个segment包含必要的字段
+        segments = cinematography.get("segments", [])
+        for segment in segments:
+            if not isinstance(segment, dict):
+                logger.warning(f"segment不是字典类型: {segment}，跳过")
+                continue
+                
+            segment_required_fields = {
+                "start_time": (float, 0.0),
+                "end_time": (float, 5.0),
+                "shot_type": (str, "未知"),
+                "shot_description": (str, "未提供描述"),
+                "visual_elements": (dict, {}),
+                "cinematic_language": (dict, {}),
+                "narrative_structure": (str, ""),
+                "audio_analysis": (dict, {}),
+                "subject_focus": (dict, {})
+            }
+            
+            for field, (field_type, default_value) in segment_required_fields.items():
+                if field not in segment:
+                    logger.warning(f"segment缺少必要字段: {field}，添加默认值")
+                    segment[field] = default_value
+                elif not isinstance(segment[field], field_type):
+                    # 尝试转换数字类型
+                    if field_type == float and isinstance(segment[field], (int, str)):
+                        try:
+                            segment[field] = float(segment[field])
+                            continue
+                        except (ValueError, TypeError):
+                            pass
+                    logger.warning(f"segment字段类型不匹配: {field}，期望{field_type}，实际{type(segment[field])}，转换为默认值")
+                    segment[field] = default_value
     
     def _create_empty_frames_analysis_file(self, video_path: str) -> str:
         """创建一个空的帧分析文件"""
@@ -393,9 +611,53 @@ class VideoInfoExtractor:
             logger.error(f"提取文件路径时出错: {e}")
             return ""
     
+    def _update_video_metadata(self, video_id: str, custom_metadata: Dict[str, Any]) -> bool:
+        """
+        更新视频元数据信息
+        
+        参数:
+        video_id: 视频ID
+        custom_metadata: 用户自定义元数据
+        
+        返回:
+        是否成功更新
+        """
+        try:
+            if not self.mongodb_service:
+                logger.warning("MongoDB服务未初始化，无法更新视频元数据")
+                return False
+                
+            # 更新视频文档中的元数据字段
+            update_data = {}
+            if "brand" in custom_metadata and custom_metadata["brand"]:
+                update_data["metadata.brand"] = custom_metadata["brand"]
+            if "model" in custom_metadata and custom_metadata["model"]:
+                update_data["metadata.model"] = custom_metadata["model"]
+                
+            # 如果没有要更新的字段，直接返回
+            if not update_data:
+                return True
+                
+            # 执行更新
+            result = self.mongodb_service.videos.update_one(
+                {"_id": ObjectId(video_id)},
+                {"$set": update_data}
+            )
+            
+            if result.modified_count > 0:
+                logger.info(f"成功更新视频元数据: {video_id}")
+                return True
+            else:
+                logger.warning(f"未能更新视频元数据: {video_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"更新视频元数据时出错: {str(e)}")
+            return False
+    
     def _integrate_information(self, video_path: str, transcription: Dict[str, Any], 
                               vision_result: Any, cinematography_result: Any,
-                              frames_analysis_file: str) -> Dict[str, Any]:
+                              frames_analysis_file: str, custom_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         整合所有提取的信息
         
@@ -405,6 +667,7 @@ class VideoInfoExtractor:
         vision_result: 视觉分析结果
         cinematography_result: 电影摄影分析结果
         frames_analysis_file: 帧分析文件路径
+        custom_metadata: 用户自定义元数据
         
         返回:
         整合后的视频信息
@@ -415,38 +678,304 @@ class VideoInfoExtractor:
         # 解析电影摄影分析结果
         cinematography_data = self._safe_parse_json(cinematography_result, "_integrate_information.cinematography")
         
-        # 生成电影摄影分析的嵌入向量
-        cinematography_text = ""
-        if isinstance(cinematography_data, dict):
-            cinematography_text = str(cinematography_data)
-        elif isinstance(cinematography_data, str):
-            cinematography_text = cinematography_data
-        
-        # 获取嵌入向量
-        cinematography_embedding = None
-        if cinematography_text:
+        # 提取视觉分析摘要
+        frames_analysis = {}
+        if frames_analysis_file and os.path.exists(frames_analysis_file):
             try:
-                cinematography_embedding = self.embedding_service.get_embedding(cinematography_text)
-                logger.info(f"成功生成电影摄影分析的嵌入向量，维度: {len(cinematography_embedding)}")
+                with open(frames_analysis_file, 'r', encoding='utf-8') as f:
+                    frames_analysis = json.load(f)
             except Exception as e:
-                logger.error(f"生成嵌入向量时出错: {str(e)}")
+                logger.error(f"读取帧分析文件时出错: {str(e)}")
+        
+        vision_summary = self._extract_vision_summary(vision_data, frames_analysis)
+        cinematography_summary = self._extract_cinematography_summary(cinematography_result)
+        
+        # 生成内容标签和多模态信息
+        content_tags = self._generate_content_tags(transcription, vision_summary, cinematography_summary)
+        multimodal_info = self._generate_multimodal_info(transcription, vision_summary, cinematography_summary)
+
+        # 确保segments中的每个分段都有完整的字段
+        if "segments" in cinematography_data:
+            for segment in cinematography_data["segments"]:
+                # 确保每个分段有起止时间
+                if "start_time" not in segment:
+                    segment["start_time"] = 0.0
+                if "end_time" not in segment:
+                    segment["end_time"] = segment.get("start_time", 0.0) + 5.0  # 默认5秒
+                
+                # 确保有shot_type字段
+                if "shot_type" not in segment:
+                    segment["shot_type"] = "未知"
+                
+                # 确保有shot_description字段
+                if "shot_description" not in segment:
+                    segment["shot_description"] = "未提供描述"
+                
+                # 确保有visual_elements字段
+                if "visual_elements" not in segment:
+                    segment["visual_elements"] = {}
+                
+                # 确保有cinematic_language字段
+                if "cinematic_language" not in segment:
+                    segment["cinematic_language"] = {}
+                
+                # 确保有narrative_structure字段
+                if "narrative_structure" not in segment:
+                    segment["narrative_structure"] = ""
+                
+                # 确保有audio_analysis字段
+                if "audio_analysis" not in segment:
+                    segment["audio_analysis"] = {}
+                
+                # 确保有subject_focus字段
+                if "subject_focus" not in segment:
+                    segment["subject_focus"] = {}
+        
+        # 确保key_events字段存在
+        if "key_events" not in cinematography_data:
+            cinematography_data["key_events"] = []
+
+        # 确保content_overview字段存在
+        if "content_overview" not in cinematography_data:
+            cinematography_data["content_overview"] = {
+                "main_content": multimodal_info.get("content_type", "未知"),
+                "core_theme": ", ".join(multimodal_info.get("themes", ["未知"])),
+                "target_audience": "汽车爱好者",
+                "communication_purpose": "展示汽车特性"
+            }
+        
+        # 确保theme_analysis字段存在
+        if "theme_analysis" not in cinematography_data:
+            cinematography_data["theme_analysis"] = {
+                "core_message": multimodal_info.get("content_type", "未知"),
+                "emotional_tone": ", ".join(multimodal_info.get("mood", ["中性"])),
+                "value_proposition": "高品质汽车体验"
+            }
+        
+        # 确保overall_analysis字段存在
+        if "overall_analysis" not in cinematography_data:
+            cinematography_data["overall_analysis"] = {
+                "visual_style": ", ".join(multimodal_info.get("style", ["简洁"])),
+                "narrative_approach": "信息传达型",
+                "color_palette": ", ".join(cinematography_summary.get("color_palette", ["未知"])),
+                "editing_rhythm": ", ".join(cinematography_summary.get("rhythm", ["平稳"])),
+                "communication_strategy": "社交媒体"
+            }
+        
+        # 确保metadata字段存在
+        if "metadata" not in cinematography_data:
+            cinematography_data["metadata"] = {
+                "video_type": multimodal_info.get("content_type", "未知"),
+                "analysis_version": "2.5"
+            }
+        
+        # 确保emphasis_analysis字段存在
+        if "emphasis_analysis" not in cinematography_data:
+            cinematography_data["emphasis_analysis"] = {
+                "repeated_elements": multimodal_info.get("keywords", []),
+                "highlighted_content": [],
+                "emotional_peaks": []
+            }
+        
+        # 生成各种向量表示
+        embeddings = self._generate_embeddings(transcription, vision_summary, cinematography_data)
         
         # 整合所有信息
         video_info = {
             "video_path": video_path,
             "analysis_time": datetime.datetime.now().isoformat(),
-            "brand": " ",
+            "brand": multimodal_info.get("content_type", "未知").split()[0] if multimodal_info.get("content_type") else "未知",
             "transcription": transcription,
             "vision_analysis": vision_data,
             "cinematography_analysis": cinematography_data,
-            "frames_analysis_file": frames_analysis_file
+            "frames_analysis_file": frames_analysis_file,
+            "content_tags": content_tags,
+            "multimodal_info": multimodal_info,
+            "embeddings": embeddings
         }
         
-        # 添加嵌入向量
-        if cinematography_embedding:
-            video_info["cinematography_embedding"] = cinematography_embedding
+        # 如果有用户自定义元数据，优先使用它们覆盖自动识别的值
+        if custom_metadata:
+            if "brand" in custom_metadata and custom_metadata["brand"]:
+                video_info["brand"] = custom_metadata["brand"]
+                logger.info(f"使用用户提供的品牌: {custom_metadata['brand']}")
+            
+            if "model" in custom_metadata and custom_metadata["model"]:
+                video_info["model"] = custom_metadata["model"]
+                logger.info(f"使用用户提供的型号: {custom_metadata['model']}")
         
         return video_info
+    
+    def _generate_embeddings(self, transcription: Dict[str, Any], vision_summary: Dict[str, Any], 
+                           cinematography_data: Dict[str, Any]) -> Dict[str, List[float]]:
+        """
+        生成各类嵌入向量表示
+        
+        参数:
+        transcription: 转录结果
+        vision_summary: 视觉分析摘要
+        cinematography_data: 电影摄影分析数据
+        
+        返回:
+        嵌入向量字典
+        """
+        embeddings = {
+            "visual_vector": None,
+            "text_vector": None,
+            "audio_vector": None,
+            "fusion_vector": None
+        }
+        
+        # 生成文本向量（基于转录内容）
+        if "text" in transcription and transcription["text"]:
+            try:
+                text_vector = self.embedding_service.get_embedding(transcription["text"])
+                embeddings["text_vector"] = text_vector
+                logger.info("文本向量生成成功")
+            except Exception as e:
+                logger.error(f"生成文本向量时出错: {str(e)}")
+                embeddings["text_vector"] = [0] * 1536
+        else:
+            embeddings["text_vector"] = [0] * 1536
+            
+        # 生成视觉向量（基于电影摄影分析）
+        cinematography_text = ""
+        if "overall_analysis" in cinematography_data:
+            overall = cinematography_data["overall_analysis"]
+            cinematography_text += f"视觉风格: {overall.get('visual_style', '')}, "
+            cinematography_text += f"叙事方式: {overall.get('narrative_approach', '')}, "
+            cinematography_text += f"色彩: {overall.get('color_palette', '')}, "
+            cinematography_text += f"剪辑节奏: {overall.get('editing_rhythm', '')}"
+            
+        if cinematography_text:
+            try:
+                visual_vector = self.embedding_service.get_embedding(cinematography_text)
+                embeddings["visual_vector"] = visual_vector
+                logger.info("视觉向量生成成功")
+            except Exception as e:
+                logger.error(f"生成视觉向量时出错: {str(e)}")
+                embeddings["visual_vector"] = [0] * 1536
+        else:
+            embeddings["visual_vector"] = [0] * 1536
+            
+        # 生成音频向量（暂时用文本内容的向量代替）
+        embeddings["audio_vector"] = embeddings["text_vector"]
+        
+        # 确定视频类型并分配适当的权重
+        video_type = self._determine_video_type(cinematography_data, transcription)
+        weights = self._get_weights_by_video_type(video_type)
+        
+        logger.info(f"视频类型: {video_type}, 使用权重: {weights}")
+        
+        # 生成融合向量
+        try:
+            fusion_vector = self.embedding_service.generate_fusion_vector(
+                vectors={
+                    "text_vector": embeddings["text_vector"],
+                    "visual_vector": embeddings["visual_vector"],
+                    "audio_vector": embeddings["audio_vector"]
+                },
+                weights=weights
+            )
+            
+            embeddings["fusion_vector"] = fusion_vector
+            logger.info("融合向量生成成功")
+        except Exception as e:
+            logger.error(f"生成融合向量时出错: {str(e)}")
+            embeddings["fusion_vector"] = [0] * 1536
+            
+        return embeddings
+    
+    def _determine_video_type(self, cinematography_data: Dict[str, Any], transcription: Dict[str, Any]) -> str:
+        """
+        确定视频类型，用于权重分配
+        
+        参数:
+        cinematography_data: 电影摄影分析数据
+        transcription: 转录结果
+        
+        返回:
+        视频类型: "画面丰富型" 或 "人物访谈型"
+        """
+        # 首先检查元数据中是否已明确指定视频类型
+        if "metadata" in cinematography_data and "video_type" in cinematography_data["metadata"]:
+            video_type = cinematography_data["metadata"]["video_type"]
+            if "人物访谈" in video_type or "访谈" in video_type or "采访" in video_type:
+                return "人物访谈型"
+            elif "画面丰富" in video_type:
+                return "画面丰富型"
+        
+        # 检查overall_analysis中的信息
+        if "overall_analysis" in cinematography_data:
+            narrative = cinematography_data["overall_analysis"].get("narrative_approach", "")
+            if "信息传达" in narrative or "证言" in narrative:
+                return "人物访谈型"
+        
+        # 检查content_overview中的信息
+        if "content_overview" in cinematography_data:
+            content = cinematography_data["content_overview"].get("main_content", "")
+            if "访谈" in content or "采访" in content or "讲解" in content:
+                return "人物访谈型"
+        
+        # 基于segments判断
+        if "segments" in cinematography_data and cinematography_data["segments"]:
+            # 计算特写和人物镜头的比例
+            total_segments = len(cinematography_data["segments"])
+            closeup_count = 0
+            person_count = 0
+            
+            for segment in cinematography_data["segments"]:
+                shot_type = segment.get("shot_type", "").lower()
+                description = segment.get("shot_description", "").lower()
+                
+                if "特写" in shot_type or "近景" in shot_type:
+                    closeup_count += 1
+                
+                if "人物" in description or "采访" in description or "讲话" in description:
+                    person_count += 1
+            
+            # 如果人物镜头占比较高，判断为人物访谈型
+            if person_count / total_segments > 0.4:
+                return "人物访谈型"
+        
+        # 检查转录文本长度，如果文本很长，可能是人物访谈型
+        if "text" in transcription and transcription["text"]:
+            text_length = len(transcription["text"])
+            if text_length > 500:  # 长文本阈值
+                return "人物访谈型"
+        
+        # 默认为画面丰富型
+        return "画面丰富型"
+    
+    def _get_weights_by_video_type(self, video_type: str) -> Dict[str, float]:
+        """
+        根据视频类型获取适当的向量权重
+        
+        参数:
+        video_type: 视频类型
+        
+        返回:
+        权重字典
+        """
+        if video_type == "画面丰富型":
+            return {
+                "visual_vector": 0.8,
+                "text_vector": 0.1,
+                "audio_vector": 0.1
+            }
+        elif video_type == "人物访谈型":
+            return {
+                "text_vector": 0.7,
+                "audio_vector": 0.2,
+                "visual_vector": 0.1
+            }
+        else:
+            # 默认平衡权重
+            return {
+                "text_vector": 0.4,
+                "visual_vector": 0.4,
+                "audio_vector": 0.2
+            }
     
     def _extract_vision_summary(self, vision_result, frames_analysis) -> Dict[str, Any]:
         """提取视觉分析摘要"""

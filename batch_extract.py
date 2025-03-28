@@ -46,7 +46,7 @@ def process_video(video_path, output_base_dir, preserve_structure, skip_mongodb,
 
 def main():
     parser = argparse.ArgumentParser(description="批量处理视频文件")
-    parser.add_argument("--input-dir", "-i", default="/home/jinpeng/multi-agent/李想公关",
+    parser.add_argument("--input-dir", "-i", default="/home/jinpeng/multi-agent/honor-TikTok",
                       help="输入视频目录")
     parser.add_argument("--output-dir", "-o", default="./batch_output",
                       help="输出目录")
@@ -56,7 +56,7 @@ def main():
                       help="并行处理的视频数量")
     parser.add_argument("--skip-mongodb", action="store_true",
                       help="跳过MongoDB连接")
-    parser.add_argument("--special-requirements", "-r", default="",
+    parser.add_argument("--special-requirements", "-r", default="这是关于理想VLA的介绍视频，请分析视频内容，提取出视频中的关键信息",
                       help="特殊分析需求，将添加到任务描述中")
     
     global args

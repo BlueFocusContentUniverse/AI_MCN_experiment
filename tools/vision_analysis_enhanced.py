@@ -272,10 +272,11 @@ class AnalyzeVideoFramesTool(BaseTool):
                 response = client.chat.completions.create(
                     model="gemini-1.5-flash",
                     messages=[
-                        {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请为每一帧提供详细分析，并清晰标明是哪一帧的分析结果。"},
+                        {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请为每一帧提供详细分析，并清晰标明是哪一帧的分析结果。输出结果必须是一个标准的JSON字符串，可以直接使用JSON.parse来解析成json格式。使用json代码块包裹"},
                         {"role": "user", "content": batch_content}
                     ],
-                    max_tokens=4000
+                    max_tokens=4000,
+                    temperature=0.1
                 )
                 
                 # 解析批量响应
@@ -583,16 +584,12 @@ class BatchProcessingFramesTool(BaseTool):
             3. 人物（如果有）
             4. 动作和活动
             5. 情绪和氛围
-            6. 汽车相关元素（如果有）
+            6. 展示产品相关元素（如果有）
             7. 视觉风格和摄影特点
+            8. 画面中的文字和字幕信息
+            9. 画面中的品牌信息（如果有）
             
-            对于汽车相关内容，请特别详细描述:
-            - 汽车品牌和型号（如果可识别）
-            - 汽车外观特点
-            - 汽车所处环境
-            - 汽车展示方式
-            
-            以JSON格式返回，每帧一个对象。"""
+            以JSON格式返回，每帧一个对象，包裹在json代码块中，不要任何多余信息，否则无法解析。"""
             
             # 准备消息内容
             content = [{"type": "text", "text": prompt}]
@@ -628,10 +625,11 @@ class BatchProcessingFramesTool(BaseTool):
             response = self._client.chat.completions.create(
                 model="gemini-1.5-flash",  # 或使用其他支持视觉的模型
                 messages=[
-                    {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请以JSON格式返回分析结果。请务必输出json格式，不要输出其他格式。不要任何多余信息，否则无法解析。"},
+                    {"role": "system", "content": "你是一名专业的视频分析师，擅长分析视频帧内容。请以JSON格式返回分析结果。请务必输出json格式，不要输出其他格式，包裹在json代码块中。不要任何多余信息，否则无法解析。"},
                     {"role": "user", "content": content}
                 ],
-                max_tokens=4000
+                max_tokens=4000,
+                temperature=0.1
             )
             
             # 解析响应
