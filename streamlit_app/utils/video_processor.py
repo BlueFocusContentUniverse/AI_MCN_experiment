@@ -327,3 +327,151 @@ class VideoProcessorService:
                 pass
         
         return None
+    
+    def get_active_workers_count(self) -> int:
+        """获取当前活跃的工作线程数"""
+        if self.global_processor:
+            try:
+                return self.global_processor.get_active_workers_count()
+            except Exception as e:
+                logger.error(f"无法从全局处理器获取活跃工作线程数: {str(e)}")
+        
+        # 如果没有全局处理器，计算本地活跃任务数作为代理
+        # 统计真实的线程活跃状态
+        active_count = 0
+        for task_id, task_info in self.active_tasks.items():
+            if task_info.get("thread") and task_info.get("thread").is_alive():
+                active_count += 1
+        
+        return active_count
+    
+    def get_queue_size(self) -> int:
+        """获取当前队列中的视频数量"""
+        if self.global_processor:
+            try:
+                return self.global_processor.get_queue_size()
+            except Exception as e:
+                logger.error(f"无法从全局处理器获取队列大小: {str(e)}")
+        
+        # 如果有Redis服务，使用Redis队列长度
+        if self.redis_service:
+            try:
+                queue_length = self.redis_service.get_queue_length()
+                return queue_length
+            except Exception as e:
+                logger.error(f"获取Redis队列长度失败: {str(e)}")
+        
+        # 计算等待处理的任务数量
+        pending_tasks = self.task_manager.get_tasks(status="pending")
+        if pending_tasks:
+            # 计算每个任务中的视频数量
+            video_count = sum(len(task.get("videos", [])) for task in pending_tasks)
+            return video_count
+        
+        return 0
+    
+    def get_active_tasks_count(self) -> int:
+        """获取当前活跃的任务数量"""
+        if self.global_processor:
+            try:
+                return self.global_processor.get_active_tasks_count()
+            except Exception as e:
+                logger.error(f"无法从全局处理器获取活跃任务数: {str(e)}")
+        
+        # 直接从MongoDB查询处理中的任务数量
+        try:
+            processing_tasks = self.task_manager.get_tasks(status="processing")
+            processing_count = len(processing_tasks)
+            
+            # 加上本地记录的活跃任务数
+            local_active_count = len(self.active_tasks)
+            
+            # 两者可能有重叠，取最大值作为估计
+            return max(processing_count, local_active_count)
+        except Exception as e:
+            logger.error(f"获取活跃任务数失败: {str(e)}")
+            # 仅使用本地记录的活跃任务数
+            return len(self.active_tasks)
+        
+    @property
+    def max_workers(self) -> int:
+        """获取最大工作线程数"""
+        if self.global_processor:
+            try:
+                return self.global_processor.max_workers
+            except Exception as e:
+                logger.error(f"获取max_workers失败: {str(e)}")
+        
+        # 没有全局处理器时，从数据库或配置获取
+        try:
+            # 尝试从系统配置集合中获取
+            if hasattr(self.task_manager, 'db'):
+                config_collection = self.task_manager.db.get_collection('system_config')
+                if config_collection:
+                    config = config_collection.find_one({"key": "processor_config"})
+                    if config and 'max_workers' in config:
+                        return config['max_workers']
+        except Exception as e:
+            logger.error(f"从数据库获取max_workers失败: {str(e)}")
+            
+        # 如果无法从数据库获取，使用默认值
+        return 4  # 与全局处理器默认值保持一致
+        
+    @property
+    def max_concurrent_tasks(self) -> int:
+        """获取最大并发任务数"""
+        if self.global_processor:
+            try:
+                return self.global_processor.max_concurrent_tasks
+            except Exception as e:
+                logger.error(f"获取max_concurrent_tasks失败: {str(e)}")
+        
+        # 没有全局处理器时，从数据库或配置获取
+        try:
+            # 尝试从系统配置集合中获取
+            if hasattr(self.task_manager, 'db'):
+                config_collection = self.task_manager.db.get_collection('system_config')
+                if config_collection:
+                    config = config_collection.find_one({"key": "processor_config"})
+                    if config and 'max_concurrent_tasks' in config:
+                        return config['max_concurrent_tasks']
+        except Exception as e:
+            logger.error(f"从数据库获取max_concurrent_tasks失败: {str(e)}")
+            
+        # 如果无法从数据库获取，使用默认值
+        return 4  # 与全局处理器默认值保持一致
+        
+    @property
+    def worker_status(self) -> List[bool]:
+        """获取工作线程状态列表"""
+        if self.global_processor:
+            try:
+                # 尝试从全局处理器获取工作线程状态
+                return self.global_processor.worker_status
+            except Exception as e:
+                logger.error(f"无法从全局处理器获取工作线程状态: {str(e)}")
+        
+        # 如果没有全局处理器，从Redis获取工作线程状态
+        try:
+            if self.redis_service:
+                worker_statuses = self.redis_service.get_all_workers_status()
+                if worker_statuses:
+                    # 将Redis中的状态信息转换为布尔值列表
+                    return [status == "busy" for status in worker_statuses.values()]
+        except Exception as e:
+            logger.error(f"从Redis获取工作线程状态失败: {str(e)}")
+        
+        # 如果无法从Redis获取，则使用本地活跃任务信息
+        active_count = len([t for t in self.active_tasks.values() if t.get("thread") and t.get("thread").is_alive()])
+        
+        # 获取工作线程数量，尝试从数据库或配置中读取
+        workers_count = self.max_workers
+        
+        # 创建布尔值列表，表示每个工作线程的状态
+        status_list = [False] * workers_count
+        
+        # 将活跃的线程设置为True
+        for i in range(min(active_count, workers_count)):
+            status_list[i] = True
+            
+        return status_list

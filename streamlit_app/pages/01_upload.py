@@ -218,7 +218,7 @@ def main():
                     st.markdown(f"{task.get('status', '未知')}")
                 
                 with col4:
-                    st.markdown(f"[查看详情](./_tasks?task_id={task.get('_id')})")
+                    st.markdown(f"[查看详情](./tasks?task_id={task.get('_id')})")
                 
                 st.markdown("---")
     

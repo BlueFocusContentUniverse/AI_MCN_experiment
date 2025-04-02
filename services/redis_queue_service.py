@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import redis
+import os
 from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
 
@@ -10,10 +11,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Redis配置
-REDIS_HOST = "localhost"
-REDIS_PORT = 6381
-REDIS_PASSWORD = "Bfg@usr"
-REDIS_DB = 3
+REDIS_HOST = os.environ.get('REDIS_HOST', "localhost")
+REDIS_PORT = int(os.environ.get('REDIS_PORT', 6381))
+REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', "Bfg@usr")
+REDIS_DB = int(os.environ.get('REDIS_DB', 3))
 
 class RedisQueueService:
     """Redis队列服务，用于管理视频处理任务"""
@@ -116,6 +117,11 @@ class RedisQueueService:
         返回:
         任务数据或None(如果队列为空)
         """
+        # 检查Redis客户端
+        if not hasattr(self, 'redis_client') or self.redis_client is None:
+            logger.error("Redis客户端未初始化")
+            return None
+            
         try:
             # 从队列获取任务
             result = self.redis_client.brpop(self.QUEUE_VIDEO_TASKS, timeout)
@@ -123,15 +129,32 @@ class RedisQueueService:
                 return None
             
             # 解析任务数据
-            _, task_json = result
-            task_data = json.loads(task_json)
+            try:
+                _, task_json = result
+                task_data = json.loads(task_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"解析任务JSON时出错: {str(e)}")
+                return None
+            except Exception as e:
+                logger.error(f"处理任务数据时出错: {str(e)}")
+                return None
             
+            # 确保任务数据包含必要字段
+            task_id = task_data.get("task_id")
+            if not task_id:
+                logger.error("任务数据缺少task_id字段")
+                return None
+                
             # 更新任务状态为处理中
-            task_id = task_data["task_id"]
-            self.update_task_status(task_id, "processing")
+            update_success = self.update_task_status(task_id, "processing")
+            if not update_success:
+                logger.warning(f"更新任务状态失败: {task_id}, 但仍继续处理任务")
             
             # 将任务ID添加到活跃任务集合
-            self.redis_client.sadd(self.SET_ACTIVE_TASKS, task_id)
+            try:
+                self.redis_client.sadd(self.SET_ACTIVE_TASKS, task_id)
+            except Exception as e:
+                logger.warning(f"将任务添加到活跃集合时出错: {str(e)}")
             
             logger.info(f"从队列获取任务: {task_id}")
             return task_data
@@ -297,89 +320,103 @@ class RedisQueueService:
     
     def get_all_active_tasks(self) -> List[str]:
         """
-        获取所有活跃任务的ID
+        获取所有活跃任务
         
         返回:
         活跃任务ID列表
         """
         try:
-            return [task_id.decode() for task_id in self.redis_client.smembers(self.SET_ACTIVE_TASKS)]
-            
-        except Exception as e:
-            logger.error(f"获取活跃任务时出错: {str(e)}")
+            # 从活跃任务集合中获取所有任务ID
+            if hasattr(self, 'redis_client') and self.redis_client:
+                active_tasks = self.redis_client.smembers(self.SET_ACTIVE_TASKS)
+                return list(active_tasks)
             return []
-    
-    def register_worker(self, worker_id: str, status: str = "idle") -> bool:
+        except Exception as e:
+            logger.error(f"获取活跃任务列表时出错: {str(e)}")
+            return []
+            
+    def get_all_workers_status(self) -> Dict[str, str]:
+        """
+        获取所有工作线程的状态
+        
+        返回:
+        工作线程状态字典，键为工作线程ID，值为状态（"idle"或"busy"）
+        """
+        try:
+            # 从工作线程状态哈希表中获取所有工作线程状态
+            if hasattr(self, 'redis_client') and self.redis_client:
+                worker_status = self.redis_client.hgetall(self.HASH_WORKER_STATUS)
+                return worker_status
+            return {}
+        except Exception as e:
+            logger.error(f"获取工作线程状态时出错: {str(e)}")
+            return {}
+            
+    def register_worker(self, worker_id: str, initial_status: str = "idle") -> bool:
         """
         注册工作线程
         
         参数:
         worker_id: 工作线程ID
-        status: 初始状态
+        initial_status: 初始状态
         
         返回:
         是否成功注册
         """
         try:
-            worker_data = {
-                "status": status,
+            # 准备工作线程状态数据
+            status_data = {
+                "status": initial_status,
                 "registered_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
-                "current_task": None
+                "updated_at": datetime.now().isoformat()
             }
             
+            # 注册工作线程
             self.redis_client.hset(
-                self.HASH_WORKER_STATUS, 
-                worker_id, 
-                json.dumps(worker_data)
+                self.HASH_WORKER_STATUS,
+                worker_id,
+                json.dumps(status_data)
             )
             
-            logger.info(f"工作线程已注册: {worker_id}")
+            logger.info(f"工作线程 {worker_id} 已注册，初始状态: {initial_status}")
             return True
-            
         except Exception as e:
             logger.error(f"注册工作线程时出错: {str(e)}")
             return False
-    
-    def update_worker_status(self, worker_id: str, status: str, current_task: str = None) -> bool:
+            
+    def update_worker_status(self, worker_id: str, status: str, task_id: str = None) -> bool:
         """
         更新工作线程状态
         
         参数:
         worker_id: 工作线程ID
-        status: 新状态
-        current_task: 当前处理的任务ID
+        status: 状态（"idle"或"busy"）
+        task_id: 任务ID（仅用于busy状态）
         
         返回:
         是否成功更新
         """
         try:
-            # 获取当前工作线程状态
-            status_json = self.redis_client.hget(self.HASH_WORKER_STATUS, worker_id)
-            if not status_json:
-                # 如果不存在，先注册
-                self.register_worker(worker_id, status)
-                status_json = self.redis_client.hget(self.HASH_WORKER_STATUS, worker_id)
+            # 准备工作线程状态数据
+            status_data = {
+                "status": status,
+                "updated_at": datetime.now().isoformat()
+            }
             
-            worker_status = json.loads(status_json)
+            if task_id and status == "busy":
+                status_data["task_id"] = task_id
             
-            # 更新状态
-            worker_status["status"] = status
-            worker_status["updated_at"] = datetime.now().isoformat()
-            
-            if current_task is not None:
-                worker_status["current_task"] = current_task
-            
-            # 保存更新后的状态
+            # 更新工作线程状态
             self.redis_client.hset(
-                self.HASH_WORKER_STATUS, 
-                worker_id, 
-                json.dumps(worker_status)
+                self.HASH_WORKER_STATUS,
+                worker_id,
+                json.dumps(status_data)
             )
             
-            logger.info(f"更新工作线程状态: {worker_id} -> {status}")
-            return True
+            # 记录日志，但级别降为DEBUG
+            logger.debug(f"更新工作线程状态: {worker_id} -> {status}")
             
+            return True
         except Exception as e:
             logger.error(f"更新工作线程状态时出错: {str(e)}")
             return False
@@ -431,8 +468,10 @@ class RedisQueueService:
         队列中的任务数量
         """
         try:
-            return self.redis_client.llen(self.QUEUE_VIDEO_TASKS)
-            
+            # 获取队列长度
+            if hasattr(self, 'redis_client') and self.redis_client:
+                return self.redis_client.llen(self.QUEUE_VIDEO_TASKS)
+            return 0
         except Exception as e:
             logger.error(f"获取队列长度时出错: {str(e)}")
             return 0

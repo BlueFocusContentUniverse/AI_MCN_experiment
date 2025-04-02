@@ -9,6 +9,7 @@ import numpy as np
 from services.embedding_service import EmbeddingService
 from services.material_matching_service import MaterialMatchingService
 from tools.text_matching_tool import TextMatchingTool
+from services.vector_search_service import VectorSearchService
 
 
 class MaterialSearchInput(BaseModel):
@@ -27,6 +28,7 @@ class MaterialSearchTool(BaseTool):
     args_schema: Type[BaseModel] = MaterialSearchInput
     mongodb_service: MongoDBService = None
     embedding_service: EmbeddingService = None
+    vector_search_service: VectorSearchService = None
     
     model_config = {"arbitrary_types_allowed": True}
     
@@ -34,6 +36,7 @@ class MaterialSearchTool(BaseTool):
         super().__init__()
         self.mongodb_service = MongoDBService()
         self.embedding_service = EmbeddingService()
+        self.vector_search_service = VectorSearchService(self.mongodb_service)
     
     def _run(self, requirements: List[Dict[str, Any]], limit_per_requirement: int = 25) -> dict:
         """
@@ -84,10 +87,12 @@ class MaterialSearchTool(BaseTool):
             
             # 执行向量搜索
             try:
-                matching_videos = self.mongodb_service.vector_search(
-                    vector=requirement_vector,
-                    pre_filter=pre_filter,
-                    limit=limit_per_requirement
+                matching_videos = self.vector_search_service.search_similar_vectors(
+                    query_vector=requirement_vector,
+                    limit=limit_per_requirement,
+                    collection_name='videos',
+                    vector_field='vector',
+                    pre_filter=pre_filter
                 )
                 print(f"向量搜索完成，找到 {len(matching_videos)} 个匹配的视频")
             except Exception as e:

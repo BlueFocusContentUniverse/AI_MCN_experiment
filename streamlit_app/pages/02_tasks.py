@@ -1,8 +1,8 @@
 import os
 import streamlit as st
 import sys
-import time
 import datetime
+import time
 
 # 添加项目根目录到路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
@@ -12,7 +12,6 @@ from streamlit_app.services.mongo_service import TaskManagerService
 from streamlit_app.utils.video_processor import VideoProcessorService
 from streamlit_app.components.task_card import task_card, compact_task_card
 from streamlit_app.components.status_badge import status_badge, inline_status_badge
-from streamlit_app.components.processing_status import processing_status, worker_status_table, task_queue_preview
 
 # 设置页面配置
 st.set_page_config(
@@ -312,17 +311,6 @@ def main():
         # 如果不是当前选中的任务，更新选中的任务ID
         if st.session_state.selected_task_id != task_id:
             st.session_state.selected_task_id = task_id
-    
-    # 显示处理状态
-    processing_status(video_processor)
-    
-    # 显示工作线程状态表格
-    with st.expander("查看工作线程状态"):
-        worker_status_table(video_processor)
-    
-    # 显示任务队列预览
-    with st.expander("查看任务队列"):
-        task_queue_preview(video_processor)
     
     # 如果有选中的任务，显示任务详情
     if st.session_state.selected_task_id:

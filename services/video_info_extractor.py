@@ -12,6 +12,7 @@ import datetime
 import logging
 from services.embedding_service import EmbeddingService
 from bson.objectid import ObjectId
+from pymongo import MongoClient
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -43,7 +44,21 @@ class VideoInfoExtractor:
         self.mongodb_service = None
         if not skip_mongodb:
             try:
-                self.mongodb_service = MongoDBService()
+                mongo_uri = os.environ.get('MONGODB_URI', "mongodb://username:password@localhost:27018/?directConnection=true&connect=direct")
+                logger.info(f"尝试连接到MongoDB: {mongo_uri}")
+                # 明确指定端口和参数，强制直接连接
+                self.client = MongoClient(
+                    mongo_uri,
+                    serverSelectionTimeoutMS=5000,
+                    directConnection=True,
+                    replicaSet=None,
+                    socketTimeoutMS=20000, 
+                    connectTimeoutMS=20000,
+                    connect=True
+                )
+                # 尝试ping来确认连接
+                self.client.admin.command('ping')
+                self.mongodb_service = MongoDBService(self.client)
                 logger.info("MongoDB服务初始化成功")
             except Exception as e:
                 logger.warning(f"MongoDB连接失败: {str(e)}")

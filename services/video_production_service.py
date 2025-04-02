@@ -374,7 +374,7 @@ class VideoProductionService:
 请为每个需求找到最匹配的视频素材，考虑场景类型、视觉元素、情绪基调等因素。
 每个需求返回最多2个匹配的素材。{special_req_text}""",
             agent=self.material_search_agent,
-            expected_output="匹配的视频素材列表，包括每个素材的路径、基本信息和内容标签、帧分析结果的文件路径（frames_analysis_file）的**严格json格式，json内禁止出现换行符！**，不要输出任何多余信息，否则我的代码无法解析"
+            expected_output="匹配的视频素材列表，包括每个素材的路径、基本信息和内容标签的**严格json格式，json内禁止出现换行符！**，不要输出任何多余信息，否则我的代码无法解析"
         )
         
         # 创建Crew并执行任务
@@ -420,10 +420,10 @@ class VideoProductionService:
 
 2. 可用视频素材：
 - 请从以下材料中提取视频信息
-- 每个视频素材都有视频路径(video_path)和帧分析文件路径(frames_analysis_file)
+- 每个视频素材包含路径 (video_path) 和相关的片段信息 (来自 video_segment 表)。
 
 你的任务是为每个音频分段选择最合适的视频素材，并规划剪辑点。
-请使用LoadFramesAnalysisFromFile工具加载每个素材的帧分析结果，了解视频内容。{special_req_text}
+视频素材信息已经包含了必要的场景、内容描述，请直接利用这些信息进行规划。{special_req_text}
 
 音频分段详情：
 {json.dumps(simplified_audio_segments, ensure_ascii=False)}

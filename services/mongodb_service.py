@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
+from pymongo.errors import OperationFailure, ConnectionFailure
 from bson import ObjectId
 from datetime import datetime
 import time
@@ -19,9 +20,16 @@ class MongoDBService:
     def __init__(self, max_retries=3):
         """初始化MongoDB连接"""
         # 从环境变量获取MongoDB连接信息
-        mongo_uri = os.environ.get('MONGODB_URI', "mongodb://localhost:27018/")
+        username = os.environ.get("MONGODB_USERNAME")
+        password = os.environ.get("MONGODB_PASSWORD")
+        mongo_uri = "mongodb://username:password@localhost:27018/?directConnection=true"
         if not mongo_uri:
             raise ValueError("MONGODB_URI environment variable is not set")
+        
+        # 检查URI中是否包含用户名和密码
+        has_credentials = "@" in mongo_uri and not ("username:password@" in mongo_uri)
+        if not has_credentials:
+            logger.warning("警告: MongoDB URI 可能使用默认的用户名和密码")
         
         logger.info(f"尝试连接到MongoDB: {mongo_uri}")
         
@@ -29,13 +37,31 @@ class MongoDBService:
         retry_count = 0
         while retry_count < max_retries:
             try:
+                # 解析URL中的端口号以便进行验证
+                parsed_uri = mongo_uri.split('@')
+                server_part = parsed_uri[-1].split('/')[0]
+                host_port = server_part.split('?')[0]
+                expected_port = "27017"  # 默认端口
+                if ":" in host_port:
+                    expected_port = host_port.split(':')[-1]
+                
+                # 确保使用正确的端口和连接参数
                 self.client = MongoClient(
-                "mongodb://username:password@localhost:27018/?directConnection=true",
-                serverSelectionTimeoutMS=5000
-            )
+                    mongo_uri,
+                    serverSelectionTimeoutMS=5000,
+                    directConnection=True,
+                    socketTimeoutMS=20000,
+                    connectTimeoutMS=20000
+                )
                 # 测试连接
                 self.client.admin.command('ping')
-                logger.info("MongoDB连接成功")
+                
+                # 验证连接的端口
+                actual_port = str(self.client.PORT)
+                if actual_port != expected_port:
+                    logger.warning(f"警告: 连接成功但使用的端口与指定的不同 (指定: {expected_port}, 实际: {actual_port})")
+                
+                logger.info(f"MongoDB连接成功，服务器: {self.client.HOST}:{self.client.PORT}")
                 break
             except Exception as e:
                 retry_count += 1
@@ -53,8 +79,16 @@ class MongoDBService:
         self.videos: Collection = self.db['videos']        # 视频基本信息和整体分析
         self.video_segments: Collection = self.db['video_segments']  # 视频分段详细信息
         
-        # 创建索引
-        self._create_indexes()
+        # 创建索引 - 捕获可能的认证错误
+        try:
+            self._create_indexes()
+        except OperationFailure as e:
+            if "requires authentication" in str(e) or "not authorized" in str(e):
+                logger.error(f"创建索引时认证失败: {str(e)}")
+                raise ValueError(f"MongoDB认证失败，请检查用户名、密码和权限: {str(e)}")
+            else:
+                logger.error(f"创建索引时发生错误: {str(e)}")
+                raise
     
     def _create_indexes(self):
         """创建必要的索引"""
@@ -1022,4 +1056,110 @@ class MongoDBService:
                     tags.append(e)
         
         # 去重
-        return list(set(tags)) 
+        return list(set(tags))
+
+if __name__ == "__main__":
+    """
+    测试MongoDB连接和基本功能
+    
+    使用方法:
+    1. 设置环境变量 MONGODB_URI 和 MONGODB_DB (可选)
+    2. 运行此文件: python mongodb_service.py
+    """
+    try:
+        # 获取和显示配置的MongoDB URI
+        mongo_uri = os.environ.get('MONGODB_URI', "mongodb://username:password@localhost:27018/?directConnection=true&connect=direct")
+        
+        # 隐藏URI中的密码用于显示
+        display_uri = mongo_uri
+        if "@" in mongo_uri:
+            parts = mongo_uri.split("@")
+            auth_part = parts[0]
+            if ":" in auth_part:
+                username = auth_part.split(":")[0].replace("mongodb://", "")
+                display_uri = f"mongodb://{username}:******@{parts[1]}"
+        
+        print(f"配置的MongoDB URI: {display_uri}")
+        
+        # 检查认证信息
+        if "username:password@" in mongo_uri:
+            print("警告: 使用默认用户名和密码！请设置正确的MongoDB认证信息")
+        
+        # 解析端口信息
+        try:
+            parsed_uri = mongo_uri.split('@')
+            server_part = parsed_uri[-1].split('/')[0]
+            host_port = server_part.split('?')[0]
+            if ":" in host_port:
+                host, port = host_port.split(':')
+                print(f"配置的连接信息 - 主机: {host}, 端口: {port}")
+            else:
+                print(f"配置的连接信息 - 主机: {host_port}, 端口: 默认(27017)")
+        except Exception as e:
+            print(f"解析URI时出错: {str(e)}")
+        
+        # 尝试创建服务实例
+        print("\n正在测试MongoDB连接...")
+        mongo_service = MongoDBService()
+        
+        # 显示实际连接信息
+        print(f"\n实际连接信息:")
+        print(f"- 主机: {mongo_service.client.HOST}")
+        print(f"- 端口: {mongo_service.client.PORT}")
+        print(f"- 连接选项: {mongo_service.client.options}")
+        
+        try:
+            # 测试认证 - 尝试列出所有数据库
+            print("\n测试认证和权限...")
+            dbs = mongo_service.client.list_database_names()
+            print(f"认证成功! 可访问的数据库: {', '.join(dbs)}")
+            
+            # 获取数据库信息
+            db_stats = mongo_service.db.command("dbStats")
+            print(f"\n数据库统计信息:")
+            print(f"- 数据库名称: {mongo_service.db.name}")
+            print(f"- 集合数量: {db_stats.get('collections', 0)}")
+            print(f"- 文档总数: {db_stats.get('objects', 0)}")
+            print(f"- 数据库大小: {db_stats.get('dataSize', 0) / (1024 * 1024):.2f} MB")
+            
+            # 获取集合计数
+            videos_count = mongo_service.videos.count_documents({})
+            segments_count = mongo_service.video_segments.count_documents({})
+            print(f"\n集合统计信息:")
+            print(f"- videos集合: {videos_count} 条记录")
+            print(f"- video_segments集合: {segments_count} 条记录")
+            
+            if videos_count > 0:
+                # 获取最新的视频记录
+                latest_video = mongo_service.videos.find_one(
+                    sort=[("created_at", -1)]
+                )
+                if latest_video:
+                    print(f"\n最新视频记录:")
+                    print(f"- 标题: {latest_video.get('title', '未知')}")
+                    print(f"- 文件路径: {latest_video.get('file_info', {}).get('path', '未知')}")
+                    print(f"- 创建时间: {latest_video.get('created_at', '未知')}")
+        
+        except OperationFailure as e:
+            print(f"\n认证或权限错误: {str(e)}")
+            print("\n可能的解决方案:")
+            print("1. 检查MongoDB URI中的用户名和密码是否正确")
+            print("2. 确保该用户有对应数据库的读写权限")
+            print("3. 在MongoDB中运行: db.createUser({user:'用户名',pwd:'密码',roles:[{role:'readWrite',db:'数据库名'}]})")
+        
+        # 关闭连接
+        mongo_service.close()
+        print("\nMongoDB连接测试完成!\n")
+        
+    except ConnectionFailure as e:
+        print(f"\n连接失败: {str(e)}")
+        print("\n可能的解决方案:")
+        print("1. 确保MongoDB服务正在运行")
+        print("2. 检查主机名和端口是否正确")
+        print("3. 检查网络配置和防火墙设置")
+    except ValueError as e:
+        print(f"\n配置错误: {str(e)}")
+    except Exception as e:
+        print(f"\n测试MongoDB连接时出错: {str(e)}")
+        import traceback
+        print(traceback.format_exc()) 

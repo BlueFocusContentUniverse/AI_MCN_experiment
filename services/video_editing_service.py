@@ -426,7 +426,7 @@ class VideoEditingService:
                 # 处理分段内的视频片段
                 processed_parts = []
                 for j, part in enumerate(segment_parts):
-                    if "video_path" not in part or "start_time" not in part or "end_time" not in part:
+                    if "video_path" not in part or "video_start_time" not in part or "video_end_time" not in part:
                         print(f"警告: 分段 {segment_id} 的第 {j+1} 个部分缺少必要字段: {part}")
                         continue
                     
@@ -435,8 +435,8 @@ class VideoEditingService:
                     try:
                         part_file = self.cut_video_segment(
                             part["video_path"],
-                            part["start_time"],
-                            part["end_time"],
+                            part["video_start_time"],
+                            part["video_end_time"],
                             part_output,
                             part.get("keep_original_audio", True)
                         )
