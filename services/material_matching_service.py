@@ -246,7 +246,7 @@ class MaterialMatchingService:
         try:
             # 调用OpenAI GPT模型
             response = openai.chat.completions.create(
-                model="gpt-4o",  # 使用最新可用的模型
+                model="gemini-1.5-pro",  # 使用最新可用的模型
                 messages=[
                     {"role": "system", "content": "你是一位专业的视频创意分析师，擅长解析脚本并提取视觉关键元素，具有深厚的影视制作知识"},
                     {"role": "user", "content": prompt}

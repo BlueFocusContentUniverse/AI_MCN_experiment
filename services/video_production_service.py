@@ -8,6 +8,7 @@ import subprocess
 import platform
 import traceback
 import shutil
+import time
 
 from services.fish_audio_service import FishAudioService
 from agents.script_analysis_agent import ScriptAnalysisAgent
@@ -44,7 +45,7 @@ class VideoProductionService:
         # 初始化服务和Agent
         self.fish_audio_service = FishAudioService(audio_output_dir=self.audio_dir)
         self.script_analysis_agent = ScriptAnalysisAgent.create()
-        self.material_search_agent = MaterialSearchAgent.create()
+        self.material_search_agent = self._init_material_search_agent()
         self.editing_planning_agent = EditingPlanningAgent.create()
         self.video_editing_service = VideoEditingService(output_dir=self.segments_dir)
         
@@ -90,17 +91,17 @@ class VideoProductionService:
             # 如果是字符串，尝试解析
             if isinstance(result, str):
                 # 先清理结果
-                cleaned_result = result.strip()  # 去除首尾空格
-                cleaned_result = re.sub(r"[\x00-\x1F\x7F]", "", cleaned_result)  # 去掉非法控制字符
+                # cleaned_result = result.strip()  # 去除首尾空格
+                # cleaned_result = re.sub(r"[\x00-\x1F\x7F]", "", cleaned_result)  # 去掉非法控制字符
                 
                 # 查找JSON部分
-                json_match = re.search(r'```json\n(.*?)\n```', cleaned_result, re.DOTALL)
+                json_match = re.search(r'```json\n(.*?)\n```', result, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1)
                     return json.loads(json_str)
                 else:
                     # 尝试直接解析为JSON
-                    cleaned_result = re.sub(r"^```|```$", "", cleaned_result).strip()  # 去掉其他可能的代码块标记
+                    cleaned_result = re.sub(r"^```|```$", "", result).strip()  # 去掉其他可能的代码块标记
                     return json.loads(cleaned_result)
             
             # 处理可能有raw属性的对象（如CrewOutput）
@@ -173,15 +174,17 @@ class VideoProductionService:
         except Exception as e:
             print(f"记录token使用情况时出错: {str(e)}")
     
-    def produce_video(self, script: str, target_duration: float = 60.0, style: str = "汽车广告", special_requirements: str = "") -> Dict[str, Any]:
+    def produce_video(self, script: str, target_duration: float = 60.0, style: str = "短视频", 
+                    special_requirements: str = "", script_type: str = "voiceover") -> Dict[str, Any]:
         """
-        根据口播稿生产视频
+        根据脚本生产视频
         
         参数:
-        script: 口播稿文本
+        script: 脚本文本
         target_duration: 目标视频时长（秒）
         style: 视频风格
         special_requirements: 特殊需求，将添加到任务描述中
+        script_type: 脚本类型，"voiceover"表示口播稿，"visual"表示纯视觉脚本
         
         返回:
         生产结果，包含最终视频路径和相关信息
@@ -189,21 +192,50 @@ class VideoProductionService:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         project_name = f"video_{timestamp}"
         
-        # 1. 生成音频
-        print("生成语音...")
-        audio_segments = self._generate_audio_segments(script)
-        
-        # 保存音频分段信息
-        audio_info_file = os.path.join(self.audio_dir, f"{project_name}_audio_info.json")
-        self.fish_audio_service.save_segments_info(audio_segments, audio_info_file)
-        
-        # 计算实际音频总时长
-        actual_duration = sum(segment.get("duration", 0) for segment in audio_segments if "duration" in segment)
-        print(f"实际音频总时长: {actual_duration:.2f}秒")
-        
-        # 2. 分析脚本，使用实际音频时长作为目标时长
-        print("分析脚本，生成视频需求清单...")
-        requirements = self._analyze_script(script, actual_duration, style, special_requirements)
+        # 根据脚本类型选择不同的处理路径
+        if script_type == "voiceover":
+            # 1. 生成音频
+            print("生成语音...")
+            audio_segments = self._generate_audio_segments(script)
+            
+            # 保存音频分段信息
+            audio_info_file = os.path.join(self.audio_dir, f"{project_name}_audio_info.json")
+            self.fish_audio_service.save_segments_info(audio_segments, audio_info_file)
+            
+            # 计算实际音频总时长
+            actual_duration = sum(segment.get("duration", 0) for segment in audio_segments if "duration" in segment)
+            print(f"实际音频总时长: {actual_duration:.2f}秒")
+            
+            # 2. 分析脚本，使用实际音频时长作为目标时长
+            print("分析脚本，生成视频需求清单...")
+            requirements = self._analyze_script(script, actual_duration, style, special_requirements)
+            
+            has_audio = True
+        else:  # script_type == "visual"
+            # 处理纯视觉脚本
+            print("解析视觉脚本...")
+            segments = self._parse_visual_script(script, target_duration, style)
+            
+            # 使用解析结果作为需求
+            requirements = {
+                "requirements": segments
+            }
+            
+            # 创建虚拟音频分段（无实际音频）
+            audio_segments = []
+            for segment in segments:
+                audio_segment = {
+                    "segment_id": segment.get("segment_id", 0),
+                    "text": segment.get("content", ""),
+                    "duration": segment.get("duration", 0),
+                    "start_time": segment.get("start_time", 0),
+                    "end_time": segment.get("end_time", 0),
+                    "audio_file": None  # 无实际音频文件
+                }
+                audio_segments.append(audio_segment)
+                
+            audio_info_file = None  # 无音频文件信息
+            has_audio = False
         
         # 保存需求清单
         requirements_file = os.path.join(self.output_dir, f"{project_name}_requirements.json")
@@ -221,7 +253,7 @@ class VideoProductionService:
             
         # 4. 规划剪辑
         print("规划视频剪辑...")
-        editing_plan = self._plan_editing(audio_segments, materials, special_requirements)
+        editing_plan = self._plan_editing(audio_segments, materials, special_requirements, has_audio=has_audio)
         
         # 保存剪辑规划
         editing_plan_file = os.path.join(self.output_dir, f"{project_name}_editing_plan.json")
@@ -232,18 +264,19 @@ class VideoProductionService:
         print("执行视频剪辑...")
         final_video = self._execute_editing(editing_plan, project_name)
         
-        # 6. 添加字幕
-        # print("处理音频并添加字幕...")
-        # final_video_with_subtitles = self._add_subtitles_to_video(final_video, project_name)
+        # 6. 仅在有音频的情况下考虑添加字幕
+        if has_audio:
+            # 添加字幕（当前注释掉）
+            # final_video_with_subtitles = self._add_subtitles_to_video(final_video, project_name)
+            final_video_with_subtitles = final_video
+        else:
+            final_video_with_subtitles = final_video
         
-        # 返回结果
+        # 构建结果，根据不同脚本类型调整结构
         result = {
             "project_name": project_name,
             "script": script,
-            "audio_info": {
-                "segments": audio_segments,
-                "info_file": audio_info_file
-            },
+            "script_type": script_type,
             "requirements": {
                 "data": requirements,
                 "file": requirements_file
@@ -259,6 +292,13 @@ class VideoProductionService:
             "final_video": final_video_with_subtitles,
             "token_usage_records": self.token_usage_records  # 添加token使用记录
         }
+        
+        # 仅在有音频情况下添加音频信息
+        if has_audio:
+            result["audio_info"] = {
+                "segments": audio_segments,
+                "info_file": audio_info_file
+            }
         
         # 保存完整结果
         result_file = os.path.join(self.final_dir, f"{project_name}_result.json")
@@ -353,8 +393,17 @@ class VideoProductionService:
         # 使用通用JSON解析方法
         return self._safe_parse_json(result, "_analyze_script")
     
+    def _init_material_search_agent(self):
+        """初始化素材搜索Agent的占位符方法（已不再使用Agent，改为直接调用Tool）"""
+        print("素材搜索已切换为直接工具调用，不再使用Agent...")
+        # 返回None，因为在搜索函数中我们不再使用这个agent
+        return None
+    
     def _search_materials(self, requirements: Dict[str, Any], special_requirements: str = "") -> Dict[str, Any]:
         """搜索匹配的视频素材"""
+        print("\n" + "="*50)
+        print("开始执行素材搜索...")
+        
         # 提取需求列表
         if "requirements" in requirements and isinstance(requirements["requirements"], list):
             req_list = requirements["requirements"]
@@ -362,42 +411,170 @@ class VideoProductionService:
             # 尝试从原始结果中提取
             req_list = [requirements]
         
-        # 添加特殊需求到描述中
-        special_req_text = f"\n\n特殊需求: {special_requirements}" if special_requirements else ""
+        print(f"共有 {len(req_list)} 个需求项需要搜索匹配素材")
         
-        # 创建素材搜索任务
-        search_materials_task = Task(
-            description=f"""根据以下视频需求清单，搜索匹配的视频素材：
+        try:
+            print("直接使用MaterialSearchTool搜索素材...")
+            start_time = time.time()
+            
+            # 设置环境变量用于故障排除，确保在数据库搜索失败时提供备选方案
+            if 'ENABLE_MOCK_DATA' not in os.environ:
+                os.environ['ENABLE_MOCK_DATA'] = 'true'
+                print("已启用示例数据功能，用于数据库搜索失败时提供备选方案")
+            
+            # 初始化MaterialSearchTool
+            from agents.material_search_agent import MaterialSearchTool
+            material_search_tool = MaterialSearchTool()
+            
+            # 设置每个需求的素材数量限制
+            limit_per_requirement = 2
+            
+            # 特殊需求处理 - 添加到需求描述中
+            if special_requirements:
+                for req in req_list:
+                    if "description" in req:
+                        req["description"] = f"{req['description']} ({special_requirements})"
+                    else:
+                        req["description"] = special_requirements
+            
+            # 直接调用MaterialSearchTool的_run方法
+            result = material_search_tool._run(
+                requirements=req_list,
+                limit_per_requirement=limit_per_requirement
+            )
+            
+            duration = time.time() - start_time
+            print(f"素材搜索完成，耗时 {duration:.2f} 秒")
+            
+            print(f"解析结果: 找到 {len(result.get('results', []))} 个匹配结果")
+            print("="*50 + "\n")
+            
+            return result
+            
+        except Exception as e:
+            print(f"素材搜索出错: {str(e)}")
+            print(traceback.format_exc())
+            print("="*50 + "\n")
+            
+            # 返回空结果
+            return {
+                "error": f"素材搜索出错: {str(e)}",
+                "requirements_count": len(req_list),
+                "results": []
+            }
+    
+    def _parse_visual_script(self, script: str, target_duration: float, style: str) -> List[Dict[str, Any]]:
+        """
+        解析纯视觉脚本，生成场景分段
+        
+        参数:
+        script: 视觉脚本文本
+        target_duration: 目标视频时长（秒）
+        style: 视频风格
+        
+        返回:
+        场景分段列表
+        """
+        from agents.script_parsing_agent import ScriptParsingAgent
+        
+        # 创建脚本解析任务
+        parse_script_task = Task(
+            description=f"""解析以下视频脚本，识别场景并分配时长：
 
-{json.dumps(req_list, ensure_ascii=False, indent=2)}
+{script}
 
-请为每个需求找到最匹配的视频素材，考虑场景类型、视觉元素、情绪基调等因素。
-每个需求返回最多2个匹配的素材。{special_req_text}""",
-            agent=self.material_search_agent,
-            expected_output="匹配的视频素材列表，包括每个素材的路径、基本信息和内容标签的**严格json格式，json内禁止出现换行符！**，不要输出任何多余信息，否则我的代码无法解析"
+目标总时长：{target_duration}秒
+视频风格：{style}
+
+请将脚本分解为独立场景，并为每个场景分配合理的时长，确保总时长接近目标时长。
+请详细描述每个场景的视觉需求、情感基调和场景类型。""",
+            agent=ScriptParsingAgent.create(),
+            expected_output="""JSON格式的场景分段列表，包含每个场景的描述、时长和视觉需求，**严格json格式，包裹在json代码块中，json内禁止出现换行符！**禁止输出其他信息
+            output format：
+            ```json
+            {
+                "segments": [
+                    {
+                        "segment_id": "1",
+                        "content": "场景描述内容",
+                        "text": "场景内容文本",
+                        "description": "详细场景描述",
+                        "start_time": 0, 
+                        "end_time": 10, 
+                        "duration": 10,
+                        "emotion": "场景情感基调",
+                        "scene_type": "场景类型（产品展示/功能演示/场景氛围等）"
+                    }
+                ]
+            }
+            ```
+            """
         )
         
         # 创建Crew并执行任务
-        material_search_crew = Crew(
-            agents=[self.material_search_agent],
-            tasks=[search_materials_task],
+        script_parsing_crew = Crew(
+            agents=[ScriptParsingAgent.create()],
+            tasks=[parse_script_task],
             verbose=True,
             process=Process.sequential
         )
         
-        # 执行搜索
-        result = material_search_crew.kickoff()
+        # 执行解析
+        result = script_parsing_crew.kickoff()
+        output_text = str(result).strip()
+
         
         # 记录token使用情况
-        self._record_token_usage(result, "素材搜索")
+        self._record_token_usage(result, "视觉脚本解析")
         
         # 使用通用JSON解析方法
-        return self._safe_parse_json(result, "_search_materials")
-    
-    def _plan_editing(self, audio_segments: List[Dict[str, Any]], materials: Any, special_requirements: str = "") -> Dict[str, Any]:
-        """规划视频剪辑"""
-        # 简化音频分段数据，只保留必要信息
-        simplified_audio_segments = []
+        parsed_result = self._safe_parse_json(output_text, "_parse_visual_script")
+        # 提取分段
+        segments = []
+        if "segments" in parsed_result:
+            segments = parsed_result["segments"]
+            
+            # 为每个分段添加requirements格式需要的字段
+            for segment in segments:
+                # 确保有segment_id
+                if "segment_id" not in segment:
+                    segment["segment_id"] = len(segments)
+                    
+                # 将content转换为text
+                if "content" in segment and "text" not in segment:
+                    segment["text"] = segment["content"]
+                elif "text" in segment and "content" not in segment:
+                    segment["content"] = segment["text"]
+                    
+                # 处理视觉元素
+                if "visual_elements" in segment and isinstance(segment["visual_elements"], list):
+                    segment["visual_elements"] = ", ".join(segment["visual_elements"])
+                    
+                # 确保有描述字段
+                if "description" not in segment:
+                    segment["description"] = segment.get("content", "")
+                    
+                # 确保有场景类型
+                if "scene_type" not in segment:
+                    segment["scene_type"] = segment.get("scene_type", "未知")
+        
+        return segments
+        
+    def _plan_editing(self, audio_segments: List[Dict[str, Any]], materials: Any, special_requirements: str = "", has_audio: bool = True) -> Dict[str, Any]:
+        """
+        规划视频剪辑
+        
+        参数:
+        audio_segments: 音频分段数据（或虚拟分段数据）
+        materials: 视频素材信息
+        special_requirements: 特殊需求
+        has_audio: 是否包含实际音频
+        
+        返回:
+        剪辑规划
+        """
+        # 简化分段数据，保留必要信息
+        simplified_segments = []
         for segment in audio_segments:
             simplified_segment = {
                 "segment_id": segment.get("segment_id", ""),
@@ -405,43 +582,45 @@ class VideoProductionService:
                 "duration": segment.get("duration", 0),
                 "audio_file": segment.get("audio_file", "")
             }
-            simplified_audio_segments.append(simplified_segment)
+            simplified_segments.append(simplified_segment)
         
-        # 添加特殊需求到描述中
+        # 添加特殊需求和音频标志到描述中
         special_req_text = f"\n\n特殊需求: {special_requirements}" if special_requirements else ""
+        audio_flag_text = "" if has_audio else "\n\n注意：此视频没有对应音频，请仅安排视觉内容的剪辑顺序和时长。"
         
-        # 创建剪辑规划任务，使用更简洁的描述
+        # 创建剪辑规划任务，根据是否有音频调整描述
         plan_editing_task = Task(
             description=f"""规划视频剪辑任务：
 
-1. 音频分段信息：
-- 共有{len(simplified_audio_segments)}个音频分段
-- 每个分段包含ID、文本内容和时长
+1. {'音频' if has_audio else '场景'}分段信息：
+- 共有{len(simplified_segments)}个{'音频' if has_audio else '场景'}分段
+- 每个分段包含ID、{'文本内容' if has_audio else '场景描述'}和时长
 
 2. 可用视频素材：
 - 请从以下材料中提取视频信息
 - 每个视频素材包含路径 (video_path) 和相关的片段信息 (来自 video_segment 表)。
 
-你的任务是为每个音频分段选择最合适的视频素材，并规划剪辑点。
-视频素材信息已经包含了必要的场景、内容描述，请直接利用这些信息进行规划。{special_req_text}
+你的任务是为每个{'音频' if has_audio else '场景'}分段选择最合适的视频素材，并规划剪辑点。
+视频素材信息已经包含了必要的场景、内容描述，请直接利用这些信息进行规划。{special_req_text}{audio_flag_text}
 
-音频分段详情：
-{json.dumps(simplified_audio_segments, ensure_ascii=False)}
+{'音频' if has_audio else '场景'}分段详情：
+{json.dumps(simplified_segments, ensure_ascii=False)}
 
 视频素材信息：
 {materials}
 
-请确保为每个音频分段选择合适的视频片段，使视觉内容与音频内容协调一致。""",
+请确保为每个分段选择合适的视频片段，{'使视觉内容与音频内容协调一致' if has_audio else '按照场景要求匹配适当的视频内容'}。""",
             agent=self.editing_planning_agent,
             expected_output="""详细的剪辑规划，包括每个分段使用的素材和时间点。
 请包含以下信息：
-1. 每个音频分段对应的视频素材路径
+1. 每个分段对应的视频素材路径
 2. 视频的开始和结束时间点
 3. 选择该片段的理由
-4. 每段口播需要多段素材(**每条素材必须长于2秒！！！**）进行组合剪辑呈现效果，但如果口播内容较少（不超过6秒），则只需要一条素材即可。
-5. 不同的口播视频节奏不同，请根据口播视频的节奏进行剪辑，不要给用户带来不好的观感。
+4. 每段内容需要多段素材(**每条素材必须长于2秒！！！**)进行组合剪辑呈现效果，但如果内容较少（不超过6秒），则只需要一条素材即可。
+5. 不同场景节奏不同，请根据内容节奏进行剪辑，不要给用户带来不好的观感。
 6. 请确保剪辑视频的连贯性和流畅性，不要给用户带来不好的观感。
- output format：{
+7. 禁止使用重复的素材片段，在选取素材时，注意素材在视频中的位置，比如说越靠近结束的素材越适合放在视频末尾，开头时间段的素材往往适合放在开头。
+    output format：{
     "segments": [
         {
             "segment_id": "1",
@@ -456,16 +635,9 @@ class VideoProductionService:
             "start_time": 25.0,
             "end_time": 35.0,
             "reason": "选择这段视频的原因"
-        },
-        {
-            "segment_id": "2",
-            "video_path": "video3.mp4",
-            "start_time": 40.0,
-            "end_time": 50.0,
-            "reason": "选择这段视频的原因"
         }
     ]
-}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析，**output format**内禁止出现换行符！视频素材总时长必须匹配音频总时长！！！"""
+}，请务必按照**output format**输出，不要输出任何多余信息，否则我的代码无法解析，**output format**内禁止出现换行符！视频素材总时长必须匹配分段总时长！！！"""
         )
         
         # 创建Crew并执行任务
@@ -505,13 +677,23 @@ class VideoProductionService:
                             "segments": [],
                             "error": "LLM多次返回空响应，无法生成编辑计划"
                         }
-                        # 为每个音频分段创建一个基本的编辑计划项
-                        for i, segment in enumerate(simplified_audio_segments):
+                        # 为每个分段创建一个基本的编辑计划项
+                        for i, segment in enumerate(simplified_segments):
                             # 尝试从材料中获取第一个可用的视频
                             video_path = "placeholder.mp4"  # 默认占位符
                             try:
                                 # 尝试从materials中提取第一个视频路径
-                                if isinstance(materials, dict) and "materials" in materials:
+                                if isinstance(materials, dict):
+                                    # 尝试从results中提取
+                                    if "results" in materials:
+                                        for result in materials["results"]:
+                                            if "matching_videos" in result and len(result["matching_videos"]) > 0:
+                                                first_video = result["matching_videos"][0]
+                                                if "video_path" in first_video:
+                                                    video_path = first_video["video_path"]
+                                                    break
+                                # 尝试从materials中提取
+                                elif "materials" in materials:
                                     if isinstance(materials["materials"], list) and len(materials["materials"]) > 0:
                                         first_material = materials["materials"][0]
                                         if "video_path" in first_material:
@@ -542,7 +724,7 @@ class VideoProductionService:
         # 创建基本结构
         editing_plan = {
             "segments": [],
-            "audio_segments": simplified_audio_segments
+            "audio_segments": simplified_segments if has_audio else []
         }
         
         # 如果result是字典且已包含segments，直接使用
@@ -550,6 +732,12 @@ class VideoProductionService:
             editing_plan["segments"] = result["segments"]
             if "error" in result:
                 editing_plan["error"] = result["error"]
+            # 修改字段名称
+            for segment in editing_plan["segments"]:
+                if "start_time" in segment and "video_start_time" not in segment:
+                    segment["video_start_time"] = segment["start_time"]
+                if "end_time" in segment and "video_end_time" not in segment:
+                    segment["video_end_time"] = segment["end_time"]
             return editing_plan
         
         # 尝试解析JSON部分
@@ -607,11 +795,16 @@ class VideoProductionService:
                 print(f"通过正则表达式找到 {len(segment_matches)} 个分段")
                 for match in segment_matches:
                     segment_id, video_path, start_time, end_time = match
+                    # 创建同时具有start_time/end_time和video_start_time/video_end_time字段的分段
+                    start_time_float = float(start_time)
+                    end_time_float = float(end_time)
                     segment = {
                         "segment_id": segment_id,
                         "video_path": video_path,
-                        "start_time": float(start_time),
-                        "end_time": float(end_time),
+                        "start_time": start_time_float,
+                        "end_time": end_time_float,
+                        "video_start_time": start_time_float,  # 添加video_start_time字段
+                        "video_end_time": end_time_float,      # 添加video_end_time字段
                         "reason": "通过正则表达式提取，无理由信息"
                     }
                     editing_plan["segments"].append(segment)
@@ -624,12 +817,60 @@ class VideoProductionService:
         else:
             print(f"最终提取到 {len(editing_plan['segments'])} 个分段")
         
+        # 为所有分段添加video_start_time和video_end_time字段
+        for segment in editing_plan["segments"]:
+            if "start_time" in segment and "video_start_time" not in segment:
+                segment["video_start_time"] = segment["start_time"]
+            if "end_time" in segment and "video_end_time" not in segment:
+                segment["video_end_time"] = segment["end_time"]
+        
         return editing_plan
     
     def _execute_editing(self, editing_plan: Dict[str, Any], project_name: str) -> str:
         """执行剪辑"""
         # 最终输出文件
         output_file = os.path.join(self.final_dir, f"{project_name}.mp4")
+        
+        # 验证编辑计划
+        if "segments" not in editing_plan or not editing_plan["segments"]:
+            print("警告: 编辑计划中没有分段，创建空视频")
+            # 创建一个简单的空视频
+            from moviepy.editor import ColorClip
+            color_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=3)
+            color_clip.write_videofile(output_file, fps=30)
+            return output_file
+        
+        # 验证所有分段是否包含必要的字段
+        for segment in editing_plan["segments"]:
+            # 确保segment_id和video_path存在
+            if "segment_id" not in segment:
+                segment["segment_id"] = "unknown"
+            if "video_path" not in segment:
+                print(f"警告: 分段 {segment.get('segment_id', 'unknown')} 缺少video_path字段")
+                continue
+                
+            # 确保有视频开始和结束时间
+            if "video_start_time" not in segment:
+                if "start_time" in segment:
+                    segment["video_start_time"] = segment["start_time"]
+                else:
+                    segment["video_start_time"] = 0.0
+                    print(f"警告: 为分段 {segment.get('segment_id', 'unknown')} 添加默认video_start_time=0.0")
+                    
+            if "video_end_time" not in segment:
+                if "end_time" in segment:
+                    segment["video_end_time"] = segment["end_time"]
+                else:
+                    # 尝试获取视频时长
+                    try:
+                        from moviepy.editor import VideoFileClip
+                        clip = VideoFileClip(segment["video_path"])
+                        segment["video_end_time"] = clip.duration
+                        clip.close()
+                        print(f"警告: 为分段 {segment.get('segment_id', 'unknown')} 添加从视频获取的默认video_end_time={segment['video_end_time']}")
+                    except Exception as e:
+                        segment["video_end_time"] = 10.0  # 默认10秒
+                        print(f"警告: 为分段 {segment.get('segment_id', 'unknown')} 添加默认video_end_time=10.0")
         
         # 执行剪辑
         final_video = self.video_editing_service.execute_editing_plan(editing_plan, output_file)

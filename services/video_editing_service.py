@@ -390,6 +390,16 @@ class VideoEditingService:
         if not segments:
             raise ValueError("No segments in editing plan")
         
+        # 确保所有分段都有必要的字段
+        for segment in segments:
+            # 添加兼容性检查：当不存在video_start_time和video_end_time时，尝试使用start_time和end_time
+            if "video_start_time" not in segment and "start_time" in segment:
+                segment["video_start_time"] = segment["start_time"]
+                print(f"为分段 {segment.get('segment_id', 'unknown')} 添加缺失的video_start_time字段")
+            if "video_end_time" not in segment and "end_time" in segment:
+                segment["video_end_time"] = segment["end_time"]
+                print(f"为分段 {segment.get('segment_id', 'unknown')} 添加缺失的video_end_time字段")
+        
         # 获取音频分段信息
         audio_segments = editing_plan.get("audio_segments", [])
         audio_files = {}
