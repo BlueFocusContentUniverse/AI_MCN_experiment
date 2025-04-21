@@ -875,6 +875,92 @@ class VideoProductionService:
         # 执行剪辑
         final_video = self.video_editing_service.execute_editing_plan(editing_plan, output_file)
         
+        # 检查是否是visual类型视频(没有音频)，如果是，添加背景音乐
+        has_audio = True
+        if "audio_segments" in editing_plan and not editing_plan["audio_segments"]:
+            has_audio = False
+        
+        if not has_audio:
+            print("检测到visual类型视频，准备添加背景音乐...")
+            
+            # 尝试多个可能的BGM路径
+            bgm_paths = [
+                os.path.join(os.environ.get('VIDEO_BASE_DIR', '.'), "resources/audio/bgm/素材混剪卡点音乐.MP3"),  # 使用环境变量
+                "resources/audio/bgm/素材混剪卡点音乐.MP3"  # 备用相对路径
+            ]
+            
+            # 查找可用的BGM文件
+            bgm_path = None
+            for path in bgm_paths:
+                if os.path.exists(path):
+                    bgm_path = path
+                    print(f"找到背景音乐文件: {bgm_path}")
+                    break
+            
+            if bgm_path:
+                # 创建带BGM的视频输出路径
+                output_with_bgm = os.path.join(self.final_dir, f"{project_name}_with_bgm.mp4")
+                
+                try:
+                    # 获取视频时长
+                    print("获取视频时长...")
+                    duration_cmd = [
+                        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "json", final_video
+                    ]
+                    
+                    duration_info = subprocess.check_output(duration_cmd).decode('utf-8')
+                    duration_info = json.loads(duration_info)
+                    video_duration = float(duration_info.get('format', {}).get('duration', 0))
+                    print(f"视频时长: {video_duration:.2f}秒")
+                    
+                    # 添加背景音乐，循环播放直到视频结束
+                    volume = 0.3  # 设置音量为30%
+                    print(f"开始添加背景音乐 (音量: {volume})...")
+                    
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-i", final_video,  # 视频输入
+                        "-stream_loop", "-1", "-i", bgm_path,  # 循环播放音乐
+                        "-filter_complex", 
+                        f"[1:a]volume={volume},atrim=0:{video_duration}[a1]",
+                        "-map", "0:v", "-map", "[a1]",
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",  # 最短结束
+                        output_with_bgm
+                    ]
+                    
+                    print(f"执行FFmpeg命令: {' '.join(cmd)}")
+                    
+                    result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    print(f"背景音乐添加成功! 输出文件: {output_with_bgm}")
+                    
+                    if result.stderr:
+                        print(f"FFmpeg输出: {result.stderr}")
+                    
+                    # 返回添加背景音乐后的视频
+                    return output_with_bgm
+                    
+                except subprocess.CalledProcessError as e:
+                    print(f"添加背景音乐时FFmpeg命令执行失败: {str(e)}")
+                    if hasattr(e, 'stderr') and e.stderr:
+                        print(f"FFmpeg错误输出: {e.stderr}")
+                    # 如果添加背景音乐失败，返回原始视频
+                    return final_video
+                    
+                except Exception as e:
+                    print(f"添加背景音乐过程中出错: {str(e)}")
+                    import traceback
+                    print(traceback.format_exc())
+                    # 如果添加背景音乐失败，返回原始视频
+                    return final_video
+            else:
+                print("警告: 未找到背景音乐文件。尝试在以下路径寻找:")
+                for path in bgm_paths:
+                    print(f"  - {path}")
+                print("返回未添加音乐的视频")
+                return final_video
+                
         return final_video
     
     def _add_subtitles_to_video(self, video_file: str, project_name: str) -> str:

@@ -46,19 +46,11 @@ class VideoInfoExtractor:
             try:
                 mongo_uri = os.environ.get('MONGODB_URI', "mongodb://username:password@localhost:27018/?directConnection=true&connect=direct")
                 logger.info(f"尝试连接到MongoDB: {mongo_uri}")
-                # 明确指定端口和参数，强制直接连接
-                self.client = MongoClient(
-                    mongo_uri,
-                    serverSelectionTimeoutMS=5000,
-                    directConnection=True,
-                    replicaSet=None,
-                    socketTimeoutMS=20000, 
-                    connectTimeoutMS=20000,
-                    connect=True
-                )
-                # 尝试ping来确认连接
-                self.client.admin.command('ping')
-                self.mongodb_service = MongoDBService(self.client)
+                # 设置环境变量，让MongoDBService可以使用
+                if 'MONGODB_URI' not in os.environ:
+                    os.environ['MONGODB_URI'] = mongo_uri
+                # 直接创建MongoDBService实例，不传递client
+                self.mongodb_service = MongoDBService()
                 logger.info("MongoDB服务初始化成功")
             except Exception as e:
                 logger.warning(f"MongoDB连接失败: {str(e)}")

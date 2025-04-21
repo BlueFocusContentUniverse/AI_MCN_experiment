@@ -11,17 +11,7 @@ video_service = VideoProductionService(output_dir=output_dir)
 
 # 测试纯视觉脚本
 visual_script = """
-HONOR Magic6 Pro
-0-2s
-第一人称视角，男人站在楼梯上手机HONOR Magic6 Pro被踢下楼梯
-2-3s
-第一人称视角，画面加速男人下楼捡手机HONOR Magic6 Pro
-3-4s
-拿起手机HONOR Magic6 Pro
-4-7s
-滑动手机屏幕
-7-9s
-在楼梯间展示手机完好无损
+我需要一个展示理想汽车炫酷外观和高性能的混剪视频，时长30秒左右，需要你帮我写脚本
 """
 
 # 测试有音频的脚本
@@ -41,7 +31,7 @@ def test_visual_script_production():
     # 使用纯视觉脚本模式生产视频
     result = video_service.produce_video(
         script=visual_script,
-        target_duration=10.0,  
+        target_duration=30.0,  
         style="",
         special_requirements=special_requirements,
         script_type="visual"  # 指定为纯视觉脚本

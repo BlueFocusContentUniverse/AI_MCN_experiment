@@ -58,13 +58,52 @@ pip install -r requirements.txt
 
 ### 环境变量配置
 
-创建`.env`文件并配置以下环境变量：
+项目提供了一个示例环境变量文件`.env.example`，其中包含了所有需要的环境变量。您可以基于它创建自己的`.env`文件：
+
+```bash
+# 复制示例环境变量文件
+cp .env.example .env
+
+# 然后编辑.env文件，填入您的实际配置值
 ```
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_BASE_URL=your_openai_base_url
-MONGODB_URI=your_mongodb_uri
-MONGODB_DB=your_mongodb_database
-FISH_AUDIO_API_KEY=your_fish_audio_api_key
+
+必需的环境变量：
+```
+# OpenAI API配置
+OPENAI_API_KEY=your_openai_api_key_here      # OpenAI API密钥
+OPENAI_BASE_URL=https://api.openai.com/v1/   # API基础URL，可使用代理服务
+
+# MongoDB配置
+MONGODB_URI=mongodb://username:password@localhost:27017/your_db   # MongoDB连接URI
+MONGODB_DB=your_database_name                # 数据库名称
+MONGODB_USERNAME=your_username               # MongoDB用户名
+MONGODB_PASSWORD=your_password               # MongoDB密码
+
+# Fish Audio配置
+FISH_AUDIO_API_KEY=your_fish_audio_api_key   # Fish Audio API密钥
+FISH_AUDIO_API_URL=https://api.fish.audio/v1/tts   # Fish Audio API URL
+
+# 视频基础目录
+VIDEO_BASE_DIR=/path/to/your/project/        # 项目根目录的绝对路径，用于定位资源文件
+```
+
+可选的环境变量：
+```
+# 代理配置（如需使用代理访问API）
+HTTP_PROXY=http://your.proxy.address:port
+HTTPS_PROXY=http://your.proxy.address:port
+
+# 开发环境配置
+ENABLE_MOCK_DATA=true                        # 在数据库搜索失败时使用示例数据
+
+# Redis配置（如使用Redis队列）
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
+REDIS_DB=0
+
+# 视频分段信息路径
+SEGMENTS_JSON_PATH=/path/to/segments/segments_info.json
 ```
 
 ## 使用方法

@@ -26,6 +26,7 @@ venv/
 env/
 ENV/
 
+
 # IDE
 .idea/
 .vscode/
@@ -35,11 +36,13 @@ ENV/
 
 # Project specific
 .env
+!.env.example
 output/
 debug_output/
 *.mp4
 *.wav
 *.mp3
+*.MP3
 *.jpg
 *.png
 *.json
@@ -58,6 +61,7 @@ temp/
 tmp/
 *.tmp
 *.temp 
+
 
 # Test output
 test_output/
